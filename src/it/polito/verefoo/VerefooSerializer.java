@@ -16,6 +16,7 @@ import it.polito.verefoo.jaxb.Property;
 import it.polito.verefoo.translator.Translator;
 import it.polito.verefoo.utils.TestResults;
 import it.polito.verefoo.utils.VerificationResult;
+import it.polito.verefoo.partitioning.GurobiClusterer;
 
 /**
  * This class separates the Verefoo classes implementation from the actual input
@@ -55,7 +56,8 @@ public class VerefooSerializer {
 		root = norm.getRoot();
 		//VerificationResult res;
 		Translator t;
-		
+
+		GurobiClusterer clusterer = new GurobiClusterer(root);
 		try {
 			List<Path> paths = null;
 			if (root.getNetworkForwardingPaths() != null)
@@ -142,9 +144,9 @@ public class VerefooSerializer {
 				long beginAll = System.currentTimeMillis();
 				
 				if(AlgoUsed.equals("AP")) 
-				res = test.checkNFFGPropertyAP();
+					res = test.checkNFFGPropertyAP();
 				else 
-				res = test.checkNFFGPropertyMF();
+					res = test.checkNFFGPropertyMF();
 				
 				long endAll = System.currentTimeMillis();
 				//loggerResult.debug("Only checker: " + (endAll - beginAll) + "ms");
