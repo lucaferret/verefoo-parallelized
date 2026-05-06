@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 
+import com.gurobi.gurobi.GRBException;
 import com.microsoft.z3.Status;
 
 import it.polito.verefoo.allocation.AllocationGraphGenerator;
@@ -57,7 +58,14 @@ public class VerefooSerializer {
 		//VerificationResult res;
 		Translator t;
 
+		// Run Gurobi on the finalized JAXB tree
 		GurobiClusterer clusterer = new GurobiClusterer(root);
+		try {
+			clusterer.solve_ILP();
+		} catch (GRBException e) {
+			System.out.println("Unable to execute the sovler: " + e.getMessage());
+		}
+
 		try {
 			List<Path> paths = null;
 			if (root.getNetworkForwardingPaths() != null)
