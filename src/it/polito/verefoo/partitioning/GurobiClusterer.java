@@ -12,6 +12,8 @@ import it.polito.verefoo.jaxb.Graph;
 import it.polito.verefoo.jaxb.NFV;
 import it.polito.verefoo.jaxb.Neighbour;
 import it.polito.verefoo.jaxb.Node;
+import it.polito.verefoo.jaxb.Path;
+import it.polito.verefoo.jaxb.Path.PathNode;
 import it.polito.verefoo.jaxb.PName;
 import it.polito.verefoo.jaxb.Property;
 
@@ -20,6 +22,7 @@ import com.gurobi.gurobi.*;
 public class GurobiClusterer {
 
     // --- STATIC HYPERPARAMETERS ---
+    private static final int N_MIN = 6;
     private static final int N_MAX = 25;
     private static final double LAMBDA_1 = 0.9;
     private static final double LAMBDA_2 = 0.6;
@@ -52,7 +55,7 @@ public class GurobiClusterer {
         this.N = nodes.size();
 
         this.K_min = (int) Math.ceil((double) N / N_MAX);
-        this.K_max = N / 2;
+        this.K_max = N / N_MIN;
 
         for (int i = 0; i < N; i++)
             nodeIndex.put(nodes.get(i), i);
@@ -87,26 +90,62 @@ public class GurobiClusterer {
 
     private void extractPaths() {
         this.flowPaths = new HashMap<>();
-        this.validFlows = new ArrayList<>(); // The clean list
+        this.validFlows = new ArrayList<>();
 
-        // Build the O(1) lookup map using pure JAXB nodes
         Map<String, Node> nodeMap = new HashMap<>();
         for (Node n : this.nodes) {
             nodeMap.put(n.getName(), n);
         }
 
-        for (Property p : allFlows) {
-            List<Node> pi_function_nodes = computePiFunction(p.getSrc(), p.getDst(), nodeMap);
+        // Retrieve explicit paths if they exist
+        List<Path> explicitPaths = null;
+        if (nfvRoot.getNetworkForwardingPaths() != null) {
+            explicitPaths = nfvRoot.getNetworkForwardingPaths().getPath();
+        }
 
+        for (Property p : allFlows) {
+            List<Node> pi_function_nodes = new ArrayList<>();
+            boolean pathFoundFromXML = false;
+
+            // 1. Search in the XML (Exactly as VerefooProxy does)
+            if (explicitPaths != null) {
+                for (Path path : explicitPaths) {
+                    List<PathNode> pathNodes = path.getPathNode();
+                    if (!pathNodes.isEmpty()) {
+                        String first = pathNodes.get(0).getName();
+                        String last = pathNodes.get(pathNodes.size() - 1).getName();
+
+                        if (first.equals(p.getSrc()) && last.equals(p.getDst())) {
+                            // Found! Populate the list reading directly from JAXB
+                            for (PathNode pn : pathNodes) {
+                                Node n = nodeMap.get(pn.getName());
+                                if (n != null) pi_function_nodes.add(n);
+                            }
+
+                            // Remove the source node for the ILP logic (C[f] calculation)
+                            if(!pi_function_nodes.isEmpty()) pi_function_nodes.remove(0);
+
+                            pathFoundFromXML = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // 2. If it is not in the XML, use our topology function
+            if (!pathFoundFromXML) {
+                pi_function_nodes = computePiFunction(p.getSrc(), p.getDst(), nodeMap);
+            }
+
+            // Save the flow only if it is valid
             if (pi_function_nodes != null && !pi_function_nodes.isEmpty()) {
                 this.flowPaths.put(p, pi_function_nodes);
                 this.validFlows.add(p);
             } else {
-                System.err.println("WARNING: Unreachable flow on Allocation Graph! Src: " + p.getSrc() + " Dst: " + p.getDst());
-                //this.flowPaths.put(p, new ArrayList<>());
+                System.err.println("WARNING: Unreachable flow from " + p.getSrc() + " to " + p.getDst());
             }
         }
-        System.out.println("Path extraction complete using Allocation Graph topology.");
+        System.out.println("Path extraction complete. Valid flows passed to ILP: " + validFlows.size());
     }
 
     /**
@@ -183,6 +222,10 @@ public class GurobiClusterer {
             for (int k = 0; k < K_max; k++){
                 A[k] = model.addVar(0.0, 1.0, 0.0, GRB.BINARY, "A_" + k);
             }
+            // force Gurobi to access clusters in order
+            for (int k = 0; k < K_max - 1; k++) {
+                model.addConstr(A[k], GRB.GREATER_EQUAL, A[k+1], "Symmetry_Breaking_" + k);
+            }
             // assert S[f][k] = 0 or S[f][k] = 1 for f in flows , k in clusters
             GRBVar S[][] = new GRBVar[numFlows][K_max];
             // C [f] >= 1 for f in flows
@@ -214,11 +257,11 @@ public class GurobiClusterer {
                     sizeK.addTerm(1.0, X[i][k]);
                 }
                 GRBLinExpr minSize = new GRBLinExpr();
-                minSize.addTerm(2.0, A[k]);
+                minSize.addTerm((double) N_MIN, A[k]);
                 model.addConstr(sizeK, GRB.GREATER_EQUAL, minSize, "Min_Size_" + k);
 
                 GRBLinExpr maxSize = new GRBLinExpr();
-                maxSize.addTerm(N_MAX, A[k]);
+                maxSize.addTerm((double) N_MAX, A[k]);
                 model.addConstr(sizeK, GRB.LESS_EQUAL, maxSize, "Max_Size_" + k);
             }
             // Number of active clusters
