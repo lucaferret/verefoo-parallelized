@@ -2,260 +2,174 @@ package it.polito.verefoo.partitioning;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.Queue;
 
-import it.polito.verefoo.jaxb.FunctionalTypes;
-import it.polito.verefoo.jaxb.Graph;
-import it.polito.verefoo.jaxb.NFV;
-import it.polito.verefoo.jaxb.Neighbour;
 import it.polito.verefoo.jaxb.Node;
-import it.polito.verefoo.jaxb.Path;
-import it.polito.verefoo.jaxb.Path.PathNode;
-import it.polito.verefoo.jaxb.PName;
-import it.polito.verefoo.jaxb.Property;
-
 import com.gurobi.gurobi.*;
 
 public class GurobiClusterer {
 
-    // --- STATIC HYPERPARAMETERS ---
+    // Object to carry the Edges
+    public static class ClusterEdge {
+        public Node u;
+        public Node v;
+        public double weight; // Sum of all penalties (lambda) on this link
+
+        public ClusterEdge(Node u, Node v) {
+            this.u = u;
+            this.v = v;
+            this.weight = 0.0;
+        }
+    }
+
+    // Public constants so VerefooProxy can use them to calculate the weight of the edges
+    public static final double LAMBDA_ISOLATION = 0.9;
+    public static final double LAMBDA_REACHABILITY = 0.6;
+    private static final double LAMBDA_3 = 0.5;  // Weight for network load balancing
+    private static final double LAMBDA_4 = 0.9; // Weight for Firewall balancing
+
     private static final int N_MIN = 6;
     private static final int N_MAX = 25;
-    private static final double LAMBDA_1 = 0.9;
-    private static final double LAMBDA_2 = 0.6;
-    private static final double LAMBDA_3 = 0.9;
-    private static final double LAMBDA_4 = 0.9;
 
-    private NFV nfvRoot;
+    private int fw_upper_bound;
 
     // --- ILP Variables ---
     private int N, K_min, K_max;
     private List<Node> nodes;
     private int[] Fw;
 
-    private List<Property> flows_reach;
-    private List<Property> flows_isol;
-    private List<Property> allFlows;
-    // valid flows is needed to iterate through the flows and be sure that f = 0 means "Flow A" when you define the S[f][k] matrix,
-    // and f = 0 still means "Flow A" later when you define the Objective Function.
-    private List<Property> validFlows;
-    private Map<Property, List<Node>> flowPaths;
-    Map<Node, Integer> nodeIndex = new HashMap<>();
+    private List<ClusterEdge> edges;
+    private Map<Node, Integer> nodeLoads; // How many flows physically traverse each node
+    private Map<Node, Integer> nodeIndex = new HashMap<>();
 
-    // Constructor: Only needs the NFV root!
-    public GurobiClusterer(NFV root) {
-        this.nfvRoot = root;
+    // References to Gurobi variables to extract the results later
+    public GRBVar[][] X;
+    public GRBVar[] A;
 
-        // 1. Extract Nodes and compute limits
-        Graph mainGraph = nfvRoot.getGraphs().getGraph().get(0);
-        this.nodes = mainGraph.getNode();
+    // Receives Nodes, Weighted edges, and Node Loads
+    public GurobiClusterer(List<Node> nodes, List<ClusterEdge> edges, Map<Node, Integer> nodeLoads) {
+        this.nodes = nodes;
         this.N = nodes.size();
+        this.edges = edges;
+        this.nodeLoads = nodeLoads;
 
         this.K_min = (int) Math.ceil((double) N / N_MAX);
         this.K_max = N / N_MIN;
 
-        for (int i = 0; i < N; i++)
+        // Map JAXB nodes to integers from 0 to N-1 for the Gurobi matrix
+        for (int i = 0; i < N; i++) {
             nodeIndex.put(nodes.get(i), i);
-        // 2. Extract Firewall capabilities (Fw[i])
+        }
+
+        // Extraction of Firewall allocation places
         this.Fw = new int[N];
+        int totalAp = 0;
         for (int i = 0; i < N; i++) {
             Node n = nodes.get(i);
-            if (n.getFunctionalType() == FunctionalTypes.FIREWALL) {
+            if (n.getFunctionalType() == null) {
+                totalAp += 1;
                 Fw[i] = 1;
             } else {
                 Fw[i] = 0;
             }
         }
 
-        // 3. Extract and split Properties (Flows)
-        this.flows_reach = new ArrayList<>();
-        this.flows_isol = new ArrayList<>();
-        this.allFlows = new ArrayList<>();
+        // We can say with certainty that the number of allocation places in a cluster will never be greater than the minimum between the total number of AP and the maximum number of nodes in a cluster
+        fw_upper_bound = Math.min(totalAp, N_MAX);
 
-        for (Property p : nfvRoot.getPropertyDefinition().getProperty()) {
-            if (p.getName() == PName.REACHABILITY_PROPERTY) {
-                flows_reach.add(p);
-            } else if (p.getName() == PName.ISOLATION_PROPERTY) {
-                flows_isol.add(p);
-            }
-            allFlows.add(p);
-        }
-
-        // 4. Extract Paths using pure JAXB Allocation Graph topology
-        extractPaths();
-    }
-
-    private void extractPaths() {
-        this.flowPaths = new HashMap<>();
-        this.validFlows = new ArrayList<>();
-
-        Map<String, Node> nodeMap = new HashMap<>();
-        for (Node n : this.nodes) {
-            nodeMap.put(n.getName(), n);
-        }
-
-        // Retrieve explicit paths if they exist
-        List<Path> explicitPaths = null;
-        if (nfvRoot.getNetworkForwardingPaths() != null) {
-            explicitPaths = nfvRoot.getNetworkForwardingPaths().getPath();
-        }
-
-        for (Property p : allFlows) {
-            List<Node> pi_function_nodes = new ArrayList<>();
-            boolean pathFoundFromXML = false;
-
-            // 1. Search in the XML (Exactly as VerefooProxy does)
-            if (explicitPaths != null) {
-                for (Path path : explicitPaths) {
-                    List<PathNode> pathNodes = path.getPathNode();
-                    if (!pathNodes.isEmpty()) {
-                        String first = pathNodes.get(0).getName();
-                        String last = pathNodes.get(pathNodes.size() - 1).getName();
-
-                        if (first.equals(p.getSrc()) && last.equals(p.getDst())) {
-                            // Found! Populate the list reading directly from JAXB
-                            for (PathNode pn : pathNodes) {
-                                Node n = nodeMap.get(pn.getName());
-                                if (n != null) pi_function_nodes.add(n);
-                            }
-
-                            // Remove the source node for the ILP logic (C[f] calculation)
-                            if(!pi_function_nodes.isEmpty()) pi_function_nodes.remove(0);
-
-                            pathFoundFromXML = true;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            // 2. If it is not in the XML, use our topology function
-            if (!pathFoundFromXML) {
-                pi_function_nodes = computePiFunction(p.getSrc(), p.getDst(), nodeMap);
-            }
-
-            // Save the flow only if it is valid
-            if (pi_function_nodes != null && !pi_function_nodes.isEmpty()) {
-                this.flowPaths.put(p, pi_function_nodes);
-                this.validFlows.add(p);
-            } else {
-                System.err.println("WARNING: Unreachable flow from " + p.getSrc() + " to " + p.getDst());
-            }
-        }
-        System.out.println("Path extraction complete. Valid flows passed to ILP: " + validFlows.size());
-    }
-
-    /**
-     * Implements the Pi function using pure JAXB Topology.
-     * Guaranteed to include dummy nodes because AGG updated the JAXB Neighbour lists.
-     */
-    private List<Node> computePiFunction(String srcName, String dstName, Map<String, Node> nodeMap) {
-        if (!nodeMap.containsKey(srcName)) return null;
-
-        Map<String, String> parent = new HashMap<>();
-        Queue<String> queue = new LinkedList<>();
-
-        parent.put(srcName, null);
-        queue.add(srcName);
-
-        while (!queue.isEmpty()) {
-            String currentName = queue.poll();
-
-            // Did we reach the destination?
-            if (currentName.equals(dstName)) {
-                List<Node> path = new LinkedList<>();
-                String step = currentName;
-
-                // Backtrack to build the path
-                while (step != null) {
-                    path.add(0, nodeMap.get(step));
-                    step = parent.get(step);
-                }
-
-                // Pi Function: Remove the source node
-                if (!path.isEmpty()) path.remove(0);
-                return path;
-            }
-
-            // Look up the current JAXB Node
-            Node currentNode = nodeMap.get(currentName);
-            if (currentNode == null) continue;
-
-            // Iterate over JAXB Neighbours
-            for (Neighbour nb : currentNode.getNeighbour()) {
-                String nbName = nb.getName();
-                if (!parent.containsKey(nbName)) {
-                    parent.put(nbName, currentName);
-                    queue.add(nbName);
-                }
-            }
-        }
-        return null; // Return null if unreachable
+        System.out.println("Gurobi Min-Cut Pre-processing completed:");
+        System.out.println(" - Total nodes in the topology : " + N);
+        System.out.println(" - Active edges (Weighted Edges) : " + edges.size());
     }
 
     public void solve_ILP() throws GRBException {
-        // Create gurobi environment, start it and create a new model
-        GRBEnv   env   = new GRBEnv(true);
-        env.set(GRB.IntParam.OutputFlag, 0);   // set to 0 to silence Gurobi logs
-
+        // Initialization of the Gurobi environment (OutputFlag = 0 to silence verbose logs)
+        GRBEnv env = new GRBEnv(true);
+        env.set(GRB.IntParam.OutputFlag, 0);
         env.start();
+        //env.set(GRB.DoubleParam.MIPGap, 0.02); // Stops when it reaches 98% of the absolute optimum
+        // Optional: set an absolute time limit (e.g., 3 minutes)
+        //env.set(GRB.DoubleParam.TimeLimit, 180.0);
         GRBModel model = null;
 
         try {
             model = new GRBModel(env);
-
-            int numFlows = validFlows.size();
+            int numEdges = edges.size();
 
             // Decision Variables
-            // assert X[i][k] = 0 or X[i][k] = 1 for i in nodes , k in clusters
-            GRBVar X[][] = new GRBVar[N][K_max];
+
+            // X[i][k] = 1 if node i belongs to cluster k
+            X = new GRBVar[N][K_max];
             for (int i = 0; i < N; i++){
                 for (int k = 0; k < K_max; k++) {
-                    X[i][k] = model.addVar(0.0,1.0,0.0, GRB.BINARY, "X_" + i + "_" + k);
+                    X[i][k] = model.addVar(0.0, 1.0, 0.0, GRB.BINARY, "X_" + i + "_" + k);
                 }
             }
-            // assert A[k] = 0 or A[k] = 1 for k in clusters
-            GRBVar A[] = new GRBVar[K_max];
+
+            // A[k] = 1 if cluster k is active (contains nodes)
+            A = new GRBVar[K_max];
             for (int k = 0; k < K_max; k++){
                 A[k] = model.addVar(0.0, 1.0, 0.0, GRB.BINARY, "A_" + k);
             }
-            // force Gurobi to access clusters in order
+
+            // Symmetry Breaking: force the activation of clusters in sequential order (0, 1, 2...)
             for (int k = 0; k < K_max - 1; k++) {
                 model.addConstr(A[k], GRB.GREATER_EQUAL, A[k+1], "Symmetry_Breaking_" + k);
             }
-            // assert S[f][k] = 0 or S[f][k] = 1 for f in flows , k in clusters
-            GRBVar S[][] = new GRBVar[numFlows][K_max];
-            // C [f] >= 1 for f in flows
-            GRBVar C[] = new GRBVar[numFlows];
-            for (int f = 0; f < numFlows; f++) {
-                C[f] = model.addVar(1.0, GRB.INFINITY, 0.0, GRB.INTEGER, "C_" + f);
-                for (int k = 0; k < K_max; k++) {
-                    S[f][k] = model.addVar(0.0, 1.0, 0.0, GRB.BINARY, "S_" + f + "_" + k);
+
+            // Z[e] = 1 if edge e is "cut" (nodes u and v end up in different clusters)
+            GRBVar Z[] = new GRBVar[numEdges];
+            for(int e = 0; e < numEdges; e++) {
+                // Z will become binary anyway, since X is already binary. It makes no sense to impose an extra constraint
+                Z[e] = model.addVar(0.0, 1.0, 0.0, GRB.CONTINUOUS, "Z_" + e);
+
+                // Retrieve the integer indices of nodes u and v of this edge
+                int u = nodeIndex.get(edges.get(e).u);
+                int v = nodeIndex.get(edges.get(e).v);
+
+                // Min-Cut Constraints: If U and V are in different clusters k, Z[e] MUST become 1
+                for(int k = 0; k < K_max; k++) {
+
+                    // Create the expression: X[u][k] - X[v][k]
+                    GRBLinExpr diff1 = new GRBLinExpr();
+                    diff1.addTerm(1.0, X[u][k]);
+                    diff1.addTerm(-1.0, X[v][k]);
+                    model.addConstr(Z[e], GRB.GREATER_EQUAL, diff1, "Cut1_" + e + "_" + k);
+
+                    // Create the expression: X[v][k] - X[u][k]
+                    GRBLinExpr diff2 = new GRBLinExpr();
+                    diff2.addTerm(1.0, X[v][k]);
+                    diff2.addTerm(-1.0, X[u][k]);
+                    model.addConstr(Z[e], GRB.GREATER_EQUAL, diff2, "Cut2_" + e + "_" + k);
+
                 }
             }
-            // Max_Flows >= 0; Max_Fw >= 0
-            GRBVar maxFlows = model.addVar(0.0, GRB.INFINITY, 0.0, GRB.CONTINUOUS, "Max_Flows");
-            GRBVar maxFw = model.addVar(0.0, GRB.INFINITY, 0.0, GRB.CONTINUOUS, "Max_Fw");
 
-            // Constraints
-            // Each node in exactly one cluster and linked to the activation A[k]
+            // Variables for Min-Max balancing
+            GRBVar maxFlows = model.addVar(0.0, GRB.INFINITY, 0.0, GRB.CONTINUOUS, "Max_Flows");
+            GRBVar maxFw = model.addVar(0.0, fw_upper_bound, 0.0, GRB.INTEGER, "Max_Fw");
+
+            // Geometric and Capability Constraints
+
+            // Each node must belong to exactly one active cluster
             for (int i = 0; i < N; i++){
                 GRBLinExpr sumK = new GRBLinExpr();
                 for (int k = 0; k < K_max; k++) {
                     sumK.addTerm(1.0, X[i][k]);
+                    // Link the use of X to the activation of cluster A
                     model.addConstr(X[i][k], GRB.LESS_EQUAL, A[k], "Link_X_A_" + i + "_" + k);
                 }
                 model.addConstr(sumK, GRB.EQUAL, 1.0, "One_Cluster_" + i);
             }
-            // Cluster dimension
+
+            // Cluster size limits (N_MIN and N_MAX)
             for (int k = 0; k < K_max; k++) {
                 GRBLinExpr sizeK = new GRBLinExpr();
                 for (int i = 0; i < N; i++) {
                     sizeK.addTerm(1.0, X[i][k]);
                 }
+
                 GRBLinExpr minSize = new GRBLinExpr();
                 minSize.addTerm((double) N_MIN, A[k]);
                 model.addConstr(sizeK, GRB.GREATER_EQUAL, minSize, "Min_Size_" + k);
@@ -264,47 +178,30 @@ public class GurobiClusterer {
                 maxSize.addTerm((double) N_MAX, A[k]);
                 model.addConstr(sizeK, GRB.LESS_EQUAL, maxSize, "Max_Size_" + k);
             }
-            // Number of active clusters
+
+            // Limits on the total number of active clusters
             GRBLinExpr activeK = new GRBLinExpr();
             for (int k = 0; k < K_max; k++) {
                 activeK.addTerm(1.0, A[k]);
             }
             model.addConstr(activeK, GRB.GREATER_EQUAL, K_min, "Min_Active_Clusters");
             model.addConstr(activeK, GRB.LESS_EQUAL, K_max, "Max_Active_Clusters");
-            // S[f][k] linked to X
-            for (int f = 0; f < numFlows; f++) {
-                Property prop = validFlows.get(f);
-                List<Node> pathNodes = flowPaths.get(prop);
 
-                for (int k = 0; k < K_max; k++) {
-                    GRBLinExpr cover = new GRBLinExpr();
-                    for (Node n_i : pathNodes) {
-                        int i = nodeIndex.getOrDefault(n_i, -1);
-                        if (i != -1) {
-                            model.addConstr(S[f][k], GRB.GREATER_EQUAL, X[i][k], "S_lb_" + f + "_" + k + "_" + i);
-                            cover.addTerm(1.0, X[i][k]);
-                        }
-                    }
-                    model.addConstr(S[f][k], GRB.LESS_EQUAL, cover, "S_ub_" + f + "_" + k);
-                }
-            }
-            // C[f] definition
-            for (int f = 0; f < numFlows; f++) {
-                GRBLinExpr sumS = new GRBLinExpr();
-                for (int k = 0; k < K_max; k++) {
-                    sumS.addTerm(1.0, S[f][k]);
-                }
-                model.addConstr(C[f], GRB.EQUAL, sumS, "Def_C_" + f);
-            }
+            // Balancing Constraints
 
-            // balancing flows and clusters
+            // Network Load Balancing (Node Loads)
             for (int k = 0; k < K_max; k++) {
-                GRBLinExpr flowsK = new GRBLinExpr();
-                for (int f = 0; f < numFlows; f++) {
-                    flowsK.addTerm(1.0, S[f][k]);
+                GRBLinExpr loadK = new GRBLinExpr();
+                for (int i = 0; i < N; i++) {
+                    Node n = nodes.get(i);
+                    int load = nodeLoads.getOrDefault(n, 0);
+                    loadK.addTerm(load, X[i][k]);
                 }
-                model.addConstr(maxFlows, GRB.GREATER_EQUAL, flowsK, "Max_Flows_Bound_" + k);
+                model.addConstr(maxFlows, GRB.GREATER_EQUAL, loadK, "Max_Flows_Bound_" + k);
+            }
 
+            // Firewall Balancing
+            for (int k = 0; k < K_max; k++) {
                 GRBLinExpr fwK = new GRBLinExpr();
                 for (int i = 0; i < N; i++) {
                     if (Fw[i] == 1) {
@@ -314,30 +211,32 @@ public class GurobiClusterer {
                 model.addConstr(maxFw, GRB.GREATER_EQUAL, fwK, "Max_Fw_Bound_" + k);
             }
 
-            // Objective function
+            // Objective Function
+
             GRBLinExpr objective = new GRBLinExpr();
 
-            for (int f = 0; f < numFlows; f++) {
-                Property prop = validFlows.get(f);
-                double lambda = (prop.getName() == PName.ISOLATION_PROPERTY) ? LAMBDA_1 : LAMBDA_2;
-
-                objective.addTerm(lambda, C[f]);
-                objective.addConstant(-lambda);
+            // Add the edge cuts: if Z[e] is 1 (cut), we pay the 'weight' of the edge
+            for (int e = 0; e < numEdges; e++) {
+                double weight = edges.get(e).weight;
+                objective.addTerm(weight, Z[e]);
             }
 
+            // Push down the maximum peak of loads and firewalls to balance them
             objective.addTerm(LAMBDA_3, maxFlows);
             objective.addTerm(LAMBDA_4, maxFw);
 
             model.setObjective(objective, GRB.MINIMIZE);
 
-            // Execute solver
-            model.write("my_math_model.lp");
+            // Solver Execution
+
+            model.write("my_min_cut_model.lp"); // Useful for debugging
             model.optimize();
 
+            // Output and results check
             if (model.get(GRB.IntAttr.Status) == GRB.INFEASIBLE) {
-                System.err.println("Model is Infeasible. Check limits.");
+                System.err.println("The ILP model is Infeasible. Check the N_MIN and N_MAX limits.");
             } else {
-                System.out.println("--- ILP CLUSTERING RESULT ---");
+                System.out.println("\n--- ILP CLUSTERING RESULT (MIN-CUT) ---");
                 int activeClusterCount = 0;
                 for (int k = 0; k < K_max; k++) {
                     if (Math.round(A[k].get(GRB.DoubleAttr.X)) == 1) {
@@ -346,32 +245,32 @@ public class GurobiClusterer {
 
                         List<String> clusterNodes = new ArrayList<>();
                         int fwCount = 0;
+                        int totalLoad = 0;
 
                         for (int i = 0; i < N; i++) {
                             if (Math.round(X[i][k].get(GRB.DoubleAttr.X)) == 1) {
                                 Node n = nodes.get(i);
                                 clusterNodes.add(n.getName());
                                 if (Fw[i] == 1) fwCount++;
+                                totalLoad += nodeLoads.getOrDefault(n, 0);
                             }
                         }
 
-                        int flowCount = 0;
-                        for (int f = 0; f < numFlows; f++) {
-                            if (Math.round(S[f][k].get(GRB.DoubleAttr.X)) == 1) flowCount++;
-                        }
 
-                        System.out.println("Nodes (" + clusterNodes.size() + "): " + clusterNodes);
-                        System.out.println("Firewalls Available : " + fwCount);
-                        System.out.println("Flows Traversed     : " + flowCount);
+                        System.out.println("Nodes (" + clusterNodes.size() + ")    : " + clusterNodes);
+                        System.out.println("Allocable Firewalls : " + fwCount);
+                        System.out.println("Flow Load: " + totalLoad);
                     }
                 }
+                System.out.println("---------------------------------------");
                 System.out.println("Total Active Clusters: " + activeClusterCount);
+                // This is the value of the objective function
+                System.out.println("Objective Value      : " + model.get(GRB.DoubleAttr.ObjVal));
             }
         } finally {
             if (model != null)
                 model.dispose();
             env.dispose();
         }
-
     }
 }

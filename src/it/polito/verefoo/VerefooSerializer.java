@@ -17,7 +17,6 @@ import it.polito.verefoo.jaxb.Property;
 import it.polito.verefoo.translator.Translator;
 import it.polito.verefoo.utils.TestResults;
 import it.polito.verefoo.utils.VerificationResult;
-import it.polito.verefoo.partitioning.GurobiClusterer;
 
 /**
  * This class separates the Verefoo classes implementation from the actual input
@@ -57,19 +56,6 @@ public class VerefooSerializer {
 		root = norm.getRoot();
 		//VerificationResult res;
 		Translator t;
-
-		// Run Gurobi on the finalized JAXB tree
-
-		GurobiClusterer clusterer = new GurobiClusterer(root);
-		try {
-			long beginAll = System.currentTimeMillis();
-			clusterer.solve_ILP();
-			long endAll = System.currentTimeMillis();
-			System.out.println("gurobi Execution: " + ((endAll - beginAll) / 1000) + "s"); // prints PT1M3.553S
-		} catch (GRBException e) {
-			System.out.println("Unable to execute the sovler: " + e.getMessage());
-		}
-
 
 		try {
 			List<Path> paths = null;

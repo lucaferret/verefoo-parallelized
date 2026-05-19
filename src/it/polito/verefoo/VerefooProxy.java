@@ -44,6 +44,7 @@ import it.polito.verefoo.functions.Forwarder;
 import it.polito.verefoo.functions.PacketFilterAP;
 import it.polito.verefoo.graph.MaximalFlow;
 import it.polito.verefoo.graph.Traffic;
+import it.polito.verefoo.partitioning.GurobiClusterer;
 
 /**
  * 
@@ -161,6 +162,68 @@ public class VerefooProxy {
 		testResults.setAtomicFlowsCompTime(t1-t2);
 		testResults.setBeginMaxSMTTime(t1);
 		//distributeTrafficFlows();
+
+		// Start Gurobi Integration (AP)
+		System.out.println(">>> Generating Edges and Loads for Gurobi (Min-Cut)...");
+
+		Map<String, GurobiClusterer.ClusterEdge> edgeMap = new HashMap<>();
+		Map<Node, Integer> nodeLoads = new HashMap<>();
+
+		// Initialize the loads of all nodes to 0
+		for(Node n : nodes) {
+			nodeLoads.put(n, 0);
+		}
+
+		for (FlowPathAP fp : trafficFlowsMapAP.values()) {
+			List<AllocationNodeAP> path = fp.getPath();
+
+			// If the path has only 1 node (impossible in real networks, but just to be safe)
+			if (path.size() <= 1) continue;
+
+			Property p = fp.getRequirement().getOriginalProperty();
+			double lambda = (p.getName() == PName.ISOLATION_PROPERTY)
+					? GurobiClusterer.LAMBDA_ISOLATION
+					: GurobiClusterer.LAMBDA_REACHABILITY;
+
+			// Node load calculation (We start from i=1 to exclude the source/client node)
+			for (int i = 1; i < path.size(); i++) {
+				Node n = path.get(i).getNode();
+				nodeLoads.put(n, nodeLoads.get(n) + 1);
+			}
+
+			// Edge Creation and Weight Aggregation
+			for (int i = 1; i < path.size() - 1; i++) {
+				Node u = path.get(i).getNode();
+				Node v = path.get(i+1).getNode();
+
+				// Canonicalize the key to consider the Undirected edge (A-B is the same as B-A)
+				String uName = u.getName();
+				String vName = v.getName();
+				String edgeKey = (uName.compareTo(vName) < 0) ? uName + "-" + vName : vName + "-" + uName;
+
+				// Retrieve the existing edge or create it
+				GurobiClusterer.ClusterEdge edge = edgeMap.computeIfAbsent(edgeKey, k -> new GurobiClusterer.ClusterEdge(u, v));
+
+				// Add the penalty to the physical "cable"
+				edge.weight += lambda;
+			}
+		}
+
+		List<GurobiClusterer.ClusterEdge> edgesList = new ArrayList<>(edgeMap.values());
+
+		GurobiClusterer clustererAP = new GurobiClusterer(nodes, edgesList, nodeLoads);
+		try {
+			long beginAll = System.currentTimeMillis();
+			clustererAP.solve_ILP();
+			long endAll = System.currentTimeMillis();
+			System.out.println("gurobi Execution: " + ((endAll - beginAll) / 1000) + "s"); // prints PT1M3.553S
+
+		} catch (Exception e) {
+			System.err.println("Error during ILP Clustering execution:");
+			e.printStackTrace();
+		}
+		// End Gurobi Integration (AP)
+
 		allocateFunctionsAP();
 		// Change Execution depending on chosen algorithm
 		allocationManager.configureFunctionsAP(); // atomic predicate method
@@ -225,7 +288,69 @@ public class VerefooProxy {
 		 testResults.setStartMaxSMTtime(System.currentTimeMillis());
 		 allocationManager.configureFunctionsMF(); // MF method
 		 check = new Checker(ctx, nctxMF, allocationNodesMF);
-		 formalizeRequirementsMF();
+
+		// Start Gurobi Integration (MF - MIN CUT)
+		System.out.println(">>> Generating Edges and Loads for Gurobi (Min-Cut)...");
+
+		Map<String, GurobiClusterer.ClusterEdge> edgeMap = new HashMap<>();
+		Map<Node, Integer> nodeLoads = new HashMap<>();
+
+		// Initialize the loads of all nodes to 0
+		for(Node n : nodes) {
+			nodeLoads.put(n, 0);
+		}
+
+		for (FlowPathMF fp : trafficFlowsMapMF.values()) {
+			List<AllocationNodeMF> path = fp.getPath();
+
+			// If the path has only 1 node (impossible in real networks, but just to be safe)
+			if (path.size() <= 1) continue;
+
+			Property p = fp.getRequirement().getOriginalProperty();
+			double lambda = (p.getName() == PName.ISOLATION_PROPERTY)
+					? GurobiClusterer.LAMBDA_ISOLATION
+					: GurobiClusterer.LAMBDA_REACHABILITY;
+
+			// Node Load Calculation (We start from i=1 to exclude the source/client node)
+			for (int i = 1; i < path.size(); i++) {
+				Node n = path.get(i).getNode();
+				nodeLoads.put(n, nodeLoads.get(n) + 1);
+			}
+
+			// Edge Creation and Weight Aggregation
+			for (int i = 1; i < path.size() - 1; i++) {
+				Node u = path.get(i).getNode();
+				Node v = path.get(i+1).getNode();
+
+				// Canonicalize the key to consider the Undirected edge (A-B is the same as B-A)
+				String uName = u.getName();
+				String vName = v.getName();
+				String edgeKey = (uName.compareTo(vName) < 0) ? uName + "-" + vName : vName + "-" + uName;
+
+				// Retrieve the existing edge or create it
+				GurobiClusterer.ClusterEdge edge = edgeMap.computeIfAbsent(edgeKey, k -> new GurobiClusterer.ClusterEdge(u, v));
+
+				// Add the penalty to the physical "cable"
+				edge.weight += lambda;
+			}
+		}
+
+		List<GurobiClusterer.ClusterEdge> edgesList = new ArrayList<>(edgeMap.values());
+
+		GurobiClusterer clustererMF = new GurobiClusterer(nodes, edgesList, nodeLoads);
+		try {
+			long beginAll = System.currentTimeMillis();
+			clustererMF.solve_ILP();
+			long endAll = System.currentTimeMillis();
+			System.out.println("gurobi Execution: " + ((endAll - beginAll) / 1000) + "s"); // prints PT1M3.553S
+
+		} catch (Exception e) {
+			System.err.println("Error during ILP Clustering execution:");
+			e.printStackTrace();
+		}
+		// End Gurobi Integration (MF)
+
+		formalizeRequirementsMF();
 	
 		}
 
