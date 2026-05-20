@@ -32,7 +32,8 @@ public class GurobiClusterer {
     private static final int N_MIN = 6;
     private static final int N_MAX = 25;
 
-    private int fw_upper_bound;
+    private int fw_upper_bound = 0;
+    private int flows_upper_bound = 0;
 
     // --- ILP Variables ---
     private int N, K_min, K_max;
@@ -78,6 +79,10 @@ public class GurobiClusterer {
         // We can say with certainty that the number of allocation places in a cluster will never be greater than the minimum between the total number of AP and the maximum number of nodes in a cluster
         fw_upper_bound = Math.min(totalAp, N_MAX);
 
+        // Calculating the maximum numeber of hops, to have an upper bound instead of infinity
+        for (int load : nodeLoads.values()) {
+            flows_upper_bound += load;
+        }
         System.out.println("Gurobi Min-Cut Pre-processing completed:");
         System.out.println(" - Total nodes in the topology : " + N);
         System.out.println(" - Active edges (Weighted Edges) : " + edges.size());
@@ -88,7 +93,7 @@ public class GurobiClusterer {
         GRBEnv env = new GRBEnv(true);
         env.set(GRB.IntParam.OutputFlag, 0);
         env.start();
-        //env.set(GRB.DoubleParam.MIPGap, 0.02); // Stops when it reaches 98% of the absolute optimum
+        //env.set(GRB.DoubleParam.MIPGap, 0.05); // Stops when it reaches 95% of the absolute optimum
         // Optional: set an absolute time limit (e.g., 3 minutes)
         //env.set(GRB.DoubleParam.TimeLimit, 180.0);
         GRBModel model = null;
@@ -111,11 +116,6 @@ public class GurobiClusterer {
             A = new GRBVar[K_max];
             for (int k = 0; k < K_max; k++){
                 A[k] = model.addVar(0.0, 1.0, 0.0, GRB.BINARY, "A_" + k);
-            }
-
-            // Symmetry Breaking: force the activation of clusters in sequential order (0, 1, 2...)
-            for (int k = 0; k < K_max - 1; k++) {
-                model.addConstr(A[k], GRB.GREATER_EQUAL, A[k+1], "Symmetry_Breaking_" + k);
             }
 
             // Z[e] = 1 if edge e is "cut" (nodes u and v end up in different clusters)
@@ -147,7 +147,7 @@ public class GurobiClusterer {
             }
 
             // Variables for Min-Max balancing
-            GRBVar maxFlows = model.addVar(0.0, GRB.INFINITY, 0.0, GRB.CONTINUOUS, "Max_Flows");
+            GRBVar maxFlows = model.addVar(0.0, flows_upper_bound, 0.0, GRB.CONTINUOUS, "Max_Flows");
             GRBVar maxFw = model.addVar(0.0, fw_upper_bound, 0.0, GRB.INTEGER, "Max_Fw");
 
             // Geometric and Capability Constraints
