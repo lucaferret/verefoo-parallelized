@@ -185,7 +185,6 @@ public class GurobiClusterer {
                 activeK.addTerm(1.0, A[k]);
             }
             model.addConstr(activeK, GRB.GREATER_EQUAL, K_min, "Min_Active_Clusters");
-            model.addConstr(activeK, GRB.LESS_EQUAL, K_max, "Max_Active_Clusters");
 
             // Balancing Constraints
 
