@@ -255,17 +255,19 @@ public class GurobiClusterer {
                             }
                         }
 
-
                         System.out.println("Nodes (" + clusterNodes.size() + ")    : " + clusterNodes);
                         System.out.println("Allocable Firewalls : " + fwCount);
                         System.out.println("Flow Load: " + totalLoad);
                     }
                 }
+                double objValue = model.get(GRB.DoubleAttr.ObjVal);
+                double executionTime = model.get(GRB.DoubleAttr.Runtime);
+
                 System.out.println("---------------------------------------");
                 System.out.println("Total Active Clusters: " + activeClusterCount);
                 // This is the value of the objective function
-                System.out.println("Objective Value      : " + model.get(GRB.DoubleAttr.ObjVal));
-            }
+                System.out.println("Objective Value      : " + objValue);
+                System.out.println("Execution Time       : " + String.format("%.3f", executionTime) + " s");            }
         } finally {
             if (model != null)
                 model.dispose();

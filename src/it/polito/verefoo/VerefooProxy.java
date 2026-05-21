@@ -211,13 +211,11 @@ public class VerefooProxy {
 
 		List<GurobiClusterer.ClusterEdge> edgesList = new ArrayList<>(edgeMap.values());
 
+		String netName = (graph.getId() != null) ? "Graph_" + graph.getId() : "Unknown_Network";
+		System.out.println("Name of the graph: " + netName);
 		GurobiClusterer clustererAP = new GurobiClusterer(nodes, edgesList, nodeLoads);
 		try {
-			long beginAll = System.currentTimeMillis();
 			clustererAP.solve_ILP();
-			long endAll = System.currentTimeMillis();
-			System.out.println("gurobi Execution: " + ((endAll - beginAll) / 1000) + "s"); // prints PT1M3.553S
-
 		} catch (Exception e) {
 			System.err.println("Error during ILP Clustering execution:");
 			e.printStackTrace();
@@ -339,11 +337,7 @@ public class VerefooProxy {
 
 		GurobiClusterer clustererMF = new GurobiClusterer(nodes, edgesList, nodeLoads);
 		try {
-			long beginAll = System.currentTimeMillis();
 			clustererMF.solve_ILP();
-			long endAll = System.currentTimeMillis();
-			System.out.println("gurobi Execution: " + ((endAll - beginAll) / 1000) + "s"); // prints PT1M3.553S
-
 		} catch (Exception e) {
 			System.err.println("Error during ILP Clustering execution:");
 			e.printStackTrace();
