@@ -23,11 +23,20 @@ public class GurobiClusterer {
         }
     }
 
+
     // Public constants so VerefooProxy can use them to calculate the weight of the edges
-    public static final double LAMBDA_ISOLATION = 0.9;
-    public static final double LAMBDA_REACHABILITY = 0.6;
-    private static final double LAMBDA_3 = 0.5;  // Weight for network load balancing
-    private static final double LAMBDA_4 = 0.9; // Weight for Firewall balancing
+    private static double LAMBDA_ISOLATION = 0.9;
+    private static double LAMBDA_REACHABILITY = 0.6;
+    private static double LAMBDA_3 = 0.5;  // Weight for network load balancing
+    private static double LAMBDA_4 = 0.9; // Weight for Firewall balancing
+
+    // Name of the analyzed network
+    //private static String CURRENT_NETWORK_NAME = "Unknown_Network";
+    //private String networkName;
+
+    // Execution results
+    private static double OBJECTIVE_RESULT = 0.0;
+    private static double EXECUTION_TIME = 0.0;
 
     private static final int N_MIN = 6;
     private static final int N_MAX = 25;
@@ -54,7 +63,7 @@ public class GurobiClusterer {
         this.N = nodes.size();
         this.edges = edges;
         this.nodeLoads = nodeLoads;
-
+        this.networkName = CURRENT_NETWORK_NAME;
         this.K_min = (int) Math.ceil((double) N / N_MAX);
         this.K_max = N / N_MIN;
 
@@ -83,6 +92,8 @@ public class GurobiClusterer {
         for (int load : nodeLoads.values()) {
             flows_upper_bound += load;
         }
+
+        //System.out.println("Network name: " + networkName);
         System.out.println("Gurobi Min-Cut Pre-processing completed:");
         System.out.println(" - Total nodes in the topology : " + N);
         System.out.println(" - Active edges (Weighted Edges) : " + edges.size());
@@ -260,18 +271,36 @@ public class GurobiClusterer {
                         System.out.println("Flow Load: " + totalLoad);
                     }
                 }
-                double objValue = model.get(GRB.DoubleAttr.ObjVal);
-                double executionTime = model.get(GRB.DoubleAttr.Runtime);
+                OBJECTIVE_RESULT = model.get(GRB.DoubleAttr.ObjVal);
+                EXECUTION_TIME = model.get(GRB.DoubleAttr.Runtime);
 
                 System.out.println("---------------------------------------");
                 System.out.println("Total Active Clusters: " + activeClusterCount);
                 // This is the value of the objective function
-                System.out.println("Objective Value      : " + objValue);
-                System.out.println("Execution Time       : " + String.format("%.3f", executionTime) + " s");            }
+                System.out.println("Objective Value      : " + OBJECTIVE_RESULT);
+                System.out.println("Execution Time       : " + String.format("%.3f", EXECUTION_TIME) + " s");            }
         } finally {
             if (model != null)
                 model.dispose();
             env.dispose();
         }
     }
+
+    // Statics Getters and Setters
+    // Setters per le Lambda (utilizzati dal Test Runner)
+    public static void setLambdaIsolation(double lambda) { LAMBDA_ISOLATION = lambda; }
+    public static void setLambdaReachability(double lambda) { LAMBDA_REACHABILITY = lambda; }
+    public static void setLambda3(double lambda) { LAMBDA_3 = lambda; }
+    public static void setLambda4(double lambda) { LAMBDA_4 = lambda; }
+    public static void setCurrentNetworkName(String name) { CURRENT_NETWORK_NAME = name; }
+
+    // Getters for Lambdas
+    public static double getLambdaIsolation() { return LAMBDA_ISOLATION; }
+    public static double getLambdaReachability() { return LAMBDA_REACHABILITY; }
+    public static double getLambda3() { return LAMBDA_3; }
+    public static double getLambda4() { return LAMBDA_4; }
+
+    // Getters for Results
+    public static double getLastObjValue() { return OBJECTIVE_RESULT; }
+    public static double getLastExecTime() { return EXECUTION_TIME; }
 }
