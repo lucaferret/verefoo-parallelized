@@ -211,8 +211,6 @@ public class VerefooProxy {
 
 		List<GurobiClusterer.ClusterEdge> edgesList = new ArrayList<>(edgeMap.values());
 
-		String netName = (graph.getId() != null) ? "Graph_" + graph.getId() : "Unknown_Network";
-		System.out.println("Name of the graph: " + netName);
 		GurobiClusterer clustererAP = new GurobiClusterer(nodes, edgesList, nodeLoads);
 		try {
 			clustererAP.solve_ILP();

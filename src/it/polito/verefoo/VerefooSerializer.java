@@ -69,9 +69,21 @@ public class VerefooSerializer {
 							EType.INVALID_PROPERTY_DEFINITION);
 				VerefooProxy test = new VerefooProxy(g, root.getHosts(), root.getConnections(), root.getConstraints(),
 						prop, paths, AlgoUsed);
+
+				// Extract results to avoid NullPointerException
+				testResults = test.getTestTimeResults();
+
+				// Early Exit: Stop VEREFOO without blocking the compiler
+				if (it.polito.verefoo.partitioning.GurobiClusterer.stop_test) {
+					System.out.println("[Early Exit] Z3 Disabled. Return Gruobi values.");
+					this.sat = false;       // Fictitious value
+					this.result = root;     //  Prevents a crash if the test calls getResult()
+					return;
+				}
+
 				testResults = test.getTestTimeResults();
 				long beginAll = System.currentTimeMillis();
-				
+
 				if(AlgoUsed.equals("AP")) 
 				res = test.checkNFFGPropertyAP();
 				else 

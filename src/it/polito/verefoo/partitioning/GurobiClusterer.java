@@ -23,7 +23,13 @@ public class GurobiClusterer {
         }
     }
 
+    // for testing purpose only. To Be Removed
+    public static Boolean stop_test = true;
 
+    private static String LAST_CLUSTER_NODE_COUNTS = "";
+    private static String LAST_CLUSTER_FLOW_COUNTS = "";
+    private static String LAST_CLUSTER_AP_COUNTS = "";
+    private static int totalAp = 0;
     // Public constants so VerefooProxy can use them to calculate the weight of the edges
     private static double LAMBDA_ISOLATION = 0.9;
     private static double LAMBDA_REACHABILITY = 0.6;
@@ -37,9 +43,10 @@ public class GurobiClusterer {
     // Execution results
     private static double OBJECTIVE_RESULT = 0.0;
     private static double EXECUTION_TIME = 0.0;
+    private static double ACTIVE_CLUSTERS = 0;
 
     private static final int N_MIN = 6;
-    private static final int N_MAX = 25;
+    private static final int N_MAX = 40;
 
     private int fw_upper_bound = 0;
     private int flows_upper_bound = 0;
@@ -63,7 +70,7 @@ public class GurobiClusterer {
         this.N = nodes.size();
         this.edges = edges;
         this.nodeLoads = nodeLoads;
-        this.networkName = CURRENT_NETWORK_NAME;
+        //this.networkName = CURRENT_NETWORK_NAME;
         this.K_min = (int) Math.ceil((double) N / N_MAX);
         this.K_max = N / N_MIN;
 
@@ -74,7 +81,7 @@ public class GurobiClusterer {
 
         // Extraction of Firewall allocation places
         this.Fw = new int[N];
-        int totalAp = 0;
+        //int totalAp = 0;
         for (int i = 0; i < N; i++) {
             Node n = nodes.get(i);
             if (n.getFunctionalType() == null) {
@@ -247,10 +254,9 @@ public class GurobiClusterer {
                 System.err.println("The ILP model is Infeasible. Check the N_MIN and N_MAX limits.");
             } else {
                 System.out.println("\n--- ILP CLUSTERING RESULT (MIN-CUT) ---");
-                int activeClusterCount = 0;
                 for (int k = 0; k < K_max; k++) {
                     if (Math.round(A[k].get(GRB.DoubleAttr.X)) == 1) {
-                        activeClusterCount++;
+                        ACTIVE_CLUSTERS++;
                         System.out.println("\n--- CLUSTER " + k + " ---");
 
                         List<String> clusterNodes = new ArrayList<>();
@@ -275,10 +281,49 @@ public class GurobiClusterer {
                 EXECUTION_TIME = model.get(GRB.DoubleAttr.Runtime);
 
                 System.out.println("---------------------------------------");
-                System.out.println("Total Active Clusters: " + activeClusterCount);
+                System.out.println("Total Active Clusters: " + ACTIVE_CLUSTERS);
                 // This is the value of the objective function
                 System.out.println("Objective Value      : " + OBJECTIVE_RESULT);
-                System.out.println("Execution Time       : " + String.format("%.3f", EXECUTION_TIME) + " s");            }
+                System.out.println("Execution Time       : " + String.format("%.3f", EXECUTION_TIME) + " s");
+
+                List<Integer> nodeCounts = new java.util.ArrayList<>();
+                List<Integer> flowCounts = new java.util.ArrayList<>();
+                List<Integer> apCounts = new java.util.ArrayList<>();
+
+                for (int k = 0; k < K_max; k++) {
+                    // If cluster k is active (A[k] == 1)
+                    if (Math.round(A[k].get(GRB.DoubleAttr.X)) == 1) {
+                        int nodesInCluster = 0;
+                        int apsInCluster = 0;
+                        int loadInCluster = 0;
+
+                        for (int i = 0; i < N; i++) {
+                            // If node i is assigned to cluster k
+                            if (Math.round(X[i][k].get(GRB.DoubleAttr.X)) == 1) {
+                                nodesInCluster++;
+
+                                // Count Allocation Places
+                                if (Fw[i] == 1) {
+                                    apsInCluster++;
+                                }
+
+                                // Sum the flow load for this node
+                                Node n = nodes.get(i);
+                                loadInCluster += nodeLoads.getOrDefault(n, 0);
+                            }
+                        }
+
+                        nodeCounts.add(nodesInCluster);
+                        apCounts.add(apsInCluster);
+                        flowCounts.add(loadInCluster); // Using aggregate load as our flow proxy
+                    }
+                }
+
+                // Convert lists to semicolon-separated strings
+                LAST_CLUSTER_NODE_COUNTS = nodeCounts.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(";"));
+                LAST_CLUSTER_FLOW_COUNTS = flowCounts.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(";"));
+                LAST_CLUSTER_AP_COUNTS = apCounts.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(";"));
+            }
         } finally {
             if (model != null)
                 model.dispose();
@@ -292,7 +337,7 @@ public class GurobiClusterer {
     public static void setLambdaReachability(double lambda) { LAMBDA_REACHABILITY = lambda; }
     public static void setLambda3(double lambda) { LAMBDA_3 = lambda; }
     public static void setLambda4(double lambda) { LAMBDA_4 = lambda; }
-    public static void setCurrentNetworkName(String name) { CURRENT_NETWORK_NAME = name; }
+    //public static void setCurrentNetworkName(String name) { CURRENT_NETWORK_NAME = name; }
 
     // Getters for Lambdas
     public static double getLambdaIsolation() { return LAMBDA_ISOLATION; }
@@ -303,4 +348,9 @@ public class GurobiClusterer {
     // Getters for Results
     public static double getLastObjValue() { return OBJECTIVE_RESULT; }
     public static double getLastExecTime() { return EXECUTION_TIME; }
+    public static double getTotalActiveClusters() {return ACTIVE_CLUSTERS;}
+
+    public static String getLastClusterNodeCounts() { return LAST_CLUSTER_NODE_COUNTS; }
+    public static String getLastClusterFlowCounts() { return LAST_CLUSTER_FLOW_COUNTS; }
+    public static String getLastClusterApCounts() { return LAST_CLUSTER_AP_COUNTS; }
 }
