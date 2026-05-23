@@ -76,7 +76,7 @@ public class TestPerformanceGurobiStanford {
 
                                 double sumGurobiTime = 0.0;
                                 double sumObjValue = 0.0;
-                                int sumActiveClusters = 0;
+                                double sumActiveClusters = 0;
                                 int validRuns = 0;
 
                                 // Temporary variables to save the strings from the last valid configuration
@@ -120,8 +120,8 @@ public class TestPerformanceGurobiStanford {
                                 double avgObjValue = validRuns > 0 ? sumObjValue / validRuns : 0.0;
                                 double avgActiveClusters = validRuns > 0 ? sumActiveClusters / validRuns : 0.0;
 
-                                System.out.printf("Gurobi -> Time: %.3f s | Obj: %.2f | Nodes per Cluster: [%s]\n",
-                                        avgGurobiTime, avgObjValue, clusterNodes);
+                                System.out.printf("Gurobi -> Time: %.3f s | Obj: %.2f | Active clusters: %.1f | Nodes per Cluster: [%s]\n",
+                                        avgGurobiTime, avgObjValue, avgActiveClusters, clusterNodes);
 
                                 // NEW CSV ROW FORMAT: Added the lists wrapped in quotes to prevent breaking CSV cells
                                 String csvRow = String.format(java.util.Locale.US, "%s,%s,%.1f,%.1f,%.1f,%.1f,%.3f,%.2f,%.1f,\"%s\",\"%s\",\"%s\"",

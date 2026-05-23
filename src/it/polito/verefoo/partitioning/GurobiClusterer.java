@@ -254,9 +254,10 @@ public class GurobiClusterer {
                 System.err.println("The ILP model is Infeasible. Check the N_MIN and N_MAX limits.");
             } else {
                 System.out.println("\n--- ILP CLUSTERING RESULT (MIN-CUT) ---");
+                int total_active_clusters = 0;
                 for (int k = 0; k < K_max; k++) {
                     if (Math.round(A[k].get(GRB.DoubleAttr.X)) == 1) {
-                        ACTIVE_CLUSTERS++;
+                        total_active_clusters++;
                         System.out.println("\n--- CLUSTER " + k + " ---");
 
                         List<String> clusterNodes = new ArrayList<>();
@@ -279,6 +280,7 @@ public class GurobiClusterer {
                 }
                 OBJECTIVE_RESULT = model.get(GRB.DoubleAttr.ObjVal);
                 EXECUTION_TIME = model.get(GRB.DoubleAttr.Runtime);
+                ACTIVE_CLUSTERS = total_active_clusters;
 
                 System.out.println("---------------------------------------");
                 System.out.println("Total Active Clusters: " + ACTIVE_CLUSTERS);
