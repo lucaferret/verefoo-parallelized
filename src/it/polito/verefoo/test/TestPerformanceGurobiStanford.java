@@ -22,122 +22,166 @@ import it.polito.verefoo.partitioning.GurobiClusterer;
 public class TestPerformanceGurobiStanford {
 
     static String prefix = "Stanford";
-    static int seed = 999;
+    static int baseSeed = 999;
     static Random rand;
 
-    static final int numberPR = 50;
-    static final double reach = 0.5;
-    static final double complete = 0.3;
-    static final double port = 0.1;
+    // Number of runs per configuration to calculate averages
     static final int runsPerConfig = 3;
 
     public static void main(String[] args) {
-        System.out.println("Starting Gurobi Min-Cut Grid Search (Partitioning Only)...");
+        System.out.println("Starting Gurobi Min-Cut Scalability Test on Stanford (Varying Policies)...");
+
+        // ENABLE EARLY EXIT: We stop the execution immediately after Gurobi partitioning
         GurobiClusterer.setStopAfterGurobi(true);
-        runGridSearch();
+
+        runPolicyScalabilityTest();
     }
 
-    public static void runGridSearch() {
-        rand = new Random(seed);
+    public static void runPolicyScalabilityTest() {
+        rand = new Random(baseSeed);
 
+        // --- TOPOLOGY AND TRAFFIC PARAMETERS ---
+        // Number of Policy Requests
+        int[] numberPRs = {10, 20, 30, 40, 50, 60, 80, 100};
+
+        // Pairs of {reachabilityPercent, completeReachabilityPercent}
+        double[][] percentPairs = {
+                {0.5, 0.3}
+                // {0.25, 0.45},
+                // {0.75, 0.15}
+        };
+
+        // Percentage of policies specifying exact ports instead of wildcards
+        double[] portSpecifics = {0.1}; // {0.1, 0.3, 0.5, 0.75}
+
+        // --- ALGORITHMS AND LAMBDAS (Hyperparameters) ---
+        // Kept as arrays so they can be easily expanded if needed
         String[] algorithms      = {"MF", "AP"};
-        double[] lambdaIsoVals   = {0.5, 1.0};
-        double[] lambdaReachVals = {0.2, 0.5};
-        double[] lambda3Vals     = {0.1, 0.5};
-        double[] lambda4Vals     = {0.1, 0.5};
+        double[] lambdaIsoVals   = {0.9}; // Isolation requirements
+        double[] lambdaReachVals = {0.2}; // Reachability requirements
+        double[] lambda3Vals     = {0.5}; // Load balancing weight
+        double[] lambda4Vals     = {0.9}; // Firewall balancing weight
 
-        int totalCombinations = algorithms.length * lambdaIsoVals.length * lambdaReachVals.length * lambda3Vals.length * lambda4Vals.length;
+        int totalCombinations = numberPRs.length * percentPairs.length * portSpecifics.length * algorithms.length * lambdaIsoVals.length * lambdaReachVals.length * lambda3Vals.length * lambda4Vals.length;
+
         System.out.println("Total combinations to explore: " + totalCombinations);
 
-        String csvFilePath = "results_stanford_gurobi_gridsearch.csv";
+        String csvFilePath = "results_stanford_gurobi_policies.csv";
+        File file = new File(csvFilePath);
 
-        try (BufferedWriter resFile = Files.newBufferedWriter(Paths.get(csvFilePath))) {
+        // WRITE HEADER ONLY IF THE FILE DOES NOT EXIST YET
+        if (!file.exists()) {
+            try (BufferedWriter headerWriter = Files.newBufferedWriter(Paths.get(csvFilePath))) {
+                headerWriter.write("NetworkName,Policies,ReachPerc,CompleteReachPerc,PortPerc,Algorithm,LambdaIso,LambdaReach,Lambda3,Lambda4,AvgGurobiTime_s,AvgObjValue,AvgActiveClusters,ClusterNodeCounts,ClusterFlowCounts,ClusterAPCounts\n");
+            } catch (Exception e) {
+                System.err.println("Error creating the CSV header: " + e.getMessage());
+            }
+        }
 
-            // NEW CSV HEADER: Added detailed cluster metrics columns
-            resFile.write("NetworkName,Algorithm,LambdaIso,LambdaReach,Lambda3,Lambda4,AvgGurobiTime_s,AvgObjValue,avgActiveClusters,ClusterNodeCounts,ClusterFlowCounts,ClusterAPCounts\n");
+        int currentComb = 0;
 
-            int currentComb = 0;
+        // START OF NESTED LOOPS
+        for (int pr : numberPRs) {
+            for (double[] pair : percentPairs) {
+                double reach = pair[0];
+                double complete = pair[1];
 
-            for (String algo : algorithms) {
-                for (double lIso : lambdaIsoVals) {
-                    for (double lReach : lambdaReachVals) {
-                        for (double l3 : lambda3Vals) {
-                            for (double l4 : lambda4Vals) {
+                for (double port : portSpecifics) {
+                    for (String algo : algorithms) {
+                        for (double lIso : lambdaIsoVals) {
+                            for (double lReach : lambdaReachVals) {
+                                for (double l3 : lambda3Vals) {
+                                    for (double l4 : lambda4Vals) {
 
-                                currentComb++;
-                                String networkName = prefix + "_" + numberPR + "PR";
-                                System.out.println("\n--- [" + currentComb + "/" + totalCombinations + "] Algo:" + algo + " Iso:" + lIso + " Reach:" + lReach + " L3:" + l3 + " L4:" + l4 + " ---");
+                                        currentComb++;
+                                        // Generate a meaningful network name based on the current parameters
+                                        String networkName = String.format("%s_%dPR_r%.2f_c%.2f_p%.2f", prefix, pr, reach, complete, port);
+                                        System.out.println("\n--- [" + currentComb + "/" + totalCombinations + "] " + networkName + " | Algo: " + algo + " ---");
 
-                                GurobiClusterer.setLambdaIsolation(lIso);
-                                GurobiClusterer.setLambdaReachability(lReach);
-                                GurobiClusterer.setLambda3(l3);
-                                GurobiClusterer.setLambda4(l4);
-                                //GurobiClusterer.setCurrentNetworkName(networkName);
+                                        // Set current Lambdas
+                                        GurobiClusterer.setLambdaIsolation(lIso);
+                                        GurobiClusterer.setLambdaReachability(lReach);
+                                        GurobiClusterer.setLambda3(l3);
+                                        GurobiClusterer.setLambda4(l4);
 
-                                double sumGurobiTime = 0.0;
-                                double sumObjValue = 0.0;
-                                double sumActiveClusters = 0;
-                                int validRuns = 0;
+                                        // Accumulators for averages
+                                        double sumGurobiTime = 0.0;
+                                        double sumObjValue = 0.0;
+                                        double sumActiveClusters = 0.0;
+                                        int validRuns = 0;
 
-                                // Temporary variables to save the strings from the last valid configuration
-                                String clusterNodes = "";
-                                String clusterFlows = "";
-                                String clusterAps = "";
+                                        // Temporary strings to hold cluster representations
+                                        String clusterNodes = "";
+                                        String clusterFlows = "";
+                                        String clusterAps = "";
 
-                                for (int k = 0; k < runsPerConfig; k++) {
-                                    try {
-                                        TestCaseGeneratorStanford generator = new TestCaseGeneratorStanford(
-                                                networkName + "_run" + k, numberPR, Math.abs(rand.nextInt()), reach, complete, port
-                                        );
+                                        // Robustness loop (averaging results over multiple runs with different traffic generation seeds)
+                                        for (int k = 0; k < runsPerConfig; k++) {
+                                            try {
+                                                int runSeed = Math.abs(rand.nextInt());
 
-                                        JAXBContext jc = JAXBContext.newInstance("it.polito.verefoo.jaxb");
-                                        Unmarshaller u = jc.createUnmarshaller();
-                                        SchemaFactory sf = SchemaFactory.newInstance(XMLConstants.W3C_XML_SCHEMA_NS_URI);
-                                        Schema schema = sf.newSchema(new File("./xsd/nfvSchema.xsd"));
-                                        u.setSchema(schema);
+                                                TestCaseGeneratorStanford generator = new TestCaseGeneratorStanford(
+                                                        networkName + "_run" + k, pr, runSeed, reach, complete, port
+                                                );
 
-                                        NFV root = generator.getNfv();
+                                                JAXBContext jc = JAXBContext.newInstance("it.polito.verefoo.jaxb");
+                                                Unmarshaller u = jc.createUnmarshaller();
+                                                SchemaFactory sf = SchemaFactory.newInstance(XMLConstants.W3C_XML_SCHEMA_NS_URI);
+                                                Schema schema = sf.newSchema(new File("./xsd/nfvSchema.xsd"));
+                                                u.setSchema(schema);
 
-                                        new VerefooSerializer(root, algo);
+                                                NFV root = generator.getNfv();
 
-                                        sumGurobiTime += GurobiClusterer.getLastExecTime();
-                                        sumObjValue += GurobiClusterer.getLastObjValue();
-                                        sumActiveClusters += GurobiClusterer.getTotalActiveClusters();
+                                                // RUN VEREFOO (It will stop immediately after Gurobi due to the Early Exit flag)
+                                                new VerefooSerializer(root, algo);
 
-                                        // Retrieve the cluster details using the new getters
-                                        clusterNodes = GurobiClusterer.getLastClusterNodeCounts();
-                                        clusterFlows = GurobiClusterer.getLastClusterFlowCounts();
-                                        clusterAps   = GurobiClusterer.getLastClusterApCounts();
+                                                // Extract metrics directly from Gurobi
+                                                sumGurobiTime += GurobiClusterer.getLastExecTime();
+                                                sumObjValue += GurobiClusterer.getLastObjValue();
+                                                sumActiveClusters += GurobiClusterer.getTotalActiveClusters();
 
-                                        validRuns++;
+                                                clusterNodes = GurobiClusterer.getLastClusterNodeCounts();
+                                                clusterFlows = GurobiClusterer.getLastClusterFlowCounts();
+                                                clusterAps   = GurobiClusterer.getLastClusterApCounts();
 
-                                    } catch (Exception e) {
-                                        System.err.println("Error or Gurobi Timeout during run: " + e.getMessage());
+                                                validRuns++;
+
+                                            } catch (Exception e) {
+                                                System.err.println("Error in Stanford Run " + k + " (Algo: " + algo + "): " + e.getMessage());
+                                            }
+                                        }
+
+                                        // Calculate averages (avoiding division by zero)
+                                        double avgGurobiTime = validRuns > 0 ? sumGurobiTime / validRuns : 0.0;
+                                        double avgObjValue = validRuns > 0 ? sumObjValue / validRuns : 0.0;
+                                        double avgActiveClusters = validRuns > 0 ? sumActiveClusters / validRuns : 0.0;
+
+                                        System.out.printf("Gurobi [%s] -> Time: %.3f s | Obj: %.2f | Clusters: %.1f\n",
+                                                algo, avgGurobiTime, avgObjValue, avgActiveClusters);
+
+                                        // Write row in Append mode
+                                        String csvRow = String.format(java.util.Locale.US, "%s,%d,%.2f,%.2f,%.2f,%s,%.1f,%.1f,%.1f,%.1f,%.3f,%.2f,%.1f,\"%s\",\"%s\",\"%s\"",
+                                                networkName, pr, reach, complete, port, algo,
+                                                lIso, lReach, l3, l4,
+                                                avgGurobiTime, avgObjValue, avgActiveClusters,
+                                                clusterNodes, clusterFlows, clusterAps);
+
+                                        try (BufferedWriter rowWriter = java.nio.file.Files.newBufferedWriter(
+                                                Paths.get(csvFilePath),
+                                                java.nio.file.StandardOpenOption.CREATE,
+                                                java.nio.file.StandardOpenOption.APPEND)) {
+                                            rowWriter.write(csvRow + "\n");
+                                        } catch (Exception e) {
+                                            System.err.println("Unable to save row to CSV: " + e.getMessage());
+                                        }
                                     }
                                 }
-
-                                double avgGurobiTime = validRuns > 0 ? sumGurobiTime / validRuns : 0.0;
-                                double avgObjValue = validRuns > 0 ? sumObjValue / validRuns : 0.0;
-                                double avgActiveClusters = validRuns > 0 ? sumActiveClusters / validRuns : 0.0;
-
-                                System.out.printf("Gurobi -> Time: %.3f s | Obj: %.2f | Active clusters: %.1f | Nodes per Cluster: [%s]\n",
-                                        avgGurobiTime, avgObjValue, avgActiveClusters, clusterNodes);
-
-                                // NEW CSV ROW FORMAT: Added the lists wrapped in quotes to prevent breaking CSV cells
-                                String csvRow = String.format(java.util.Locale.US, "%s,%s,%.1f,%.1f,%.1f,%.1f,%.3f,%.2f,%.1f,\"%s\",\"%s\",\"%s\"",
-                                        networkName, algo, lIso, lReach, l3, l4, avgGurobiTime, avgObjValue, avgActiveClusters, clusterNodes, clusterFlows, clusterAps);
-
-                                resFile.write(csvRow + "\n");
-                                resFile.flush();
                             }
                         }
                     }
                 }
             }
-            System.out.println("\nBenchmark completed! Structured data successfully saved.");
-        } catch (Exception e) {
-            e.printStackTrace();
-            fail(e.toString());
         }
+        System.out.println("\nStanford Policy Benchmark completed! Data successfully saved.");
     }
 }
