@@ -33,7 +33,7 @@ public class TestPerformanceGurobiStanford {
 
     public static void main(String[] args) {
         System.out.println("Starting Gurobi Min-Cut Grid Search (Partitioning Only)...");
-        //GurobiClusterer.setStopAfterGurobi(true);
+        GurobiClusterer.setStopAfterGurobi(true);
         runGridSearch();
     }
 

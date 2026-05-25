@@ -74,7 +74,7 @@ public class VerefooSerializer {
 				testResults = test.getTestTimeResults();
 
 				// Early Exit: Stop VEREFOO without blocking the compiler
-				if (it.polito.verefoo.partitioning.GurobiClusterer.stop_test) {
+				if (it.polito.verefoo.partitioning.GurobiClusterer.getStopAfterGurobi()) {
 					System.out.println("[Early Exit] Z3 Disabled. Return Gruobi values.");
 					this.sat = false;       // Fictitious value
 					this.result = root;     //  Prevents a crash if the test calls getResult()

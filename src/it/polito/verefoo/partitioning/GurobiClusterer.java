@@ -23,8 +23,8 @@ public class GurobiClusterer {
         }
     }
 
-    // for testing purpose only. To Be Removed
-    public static Boolean stop_test = true;
+    // For testing purposes only. To Be Removed
+    private static Boolean stop_test = false;
 
     private static String LAST_CLUSTER_NODE_COUNTS = "";
     private static String LAST_CLUSTER_FLOW_COUNTS = "";
@@ -65,25 +65,58 @@ public class GurobiClusterer {
     public GRBVar[] A;
 
     // Receives Nodes, Weighted edges, and Node Loads
-    public GurobiClusterer(List<Node> nodes, List<ClusterEdge> edges, Map<Node, Integer> nodeLoads) {
-        this.nodes = nodes;
-        this.N = nodes.size();
-        this.edges = edges;
+    public GurobiClusterer(List<Node> originalNodes, List<ClusterEdge> originalEdges, Map<Node, Integer> nodeLoads) {
+
+        System.out.println(">>> Avvio Graph Pruning (Pre-Processing)...");
+
+        this.nodes = new ArrayList<>();
+        this.edges = new ArrayList<>();
         this.nodeLoads = nodeLoads;
-        //this.networkName = CURRENT_NETWORK_NAME;
+
+        int prunedNodesCount = 0;
+        int prunedEdgesCount = 0;
+
+        // Usiamo un Set per un controllo fulmineo degli archi successivi
+        java.util.Set<Node> validNodesSet = new java.util.HashSet<>();
+
+        // 1. FILTRIAMO I NODI
+        for (Node n : originalNodes) {
+            boolean isAllocationPlace = (n.getFunctionalType() == null);
+            int load = nodeLoads.getOrDefault(n, 0);
+
+            if (load > 0 || isAllocationPlace) {
+                this.nodes.add(n);
+                validNodesSet.add(n); // Lo aggiungiamo anche al Set
+            } else {
+                prunedNodesCount++;
+            }
+        }
+
+        // 2. FILTRIAMO GLI ARCHI in tempo O(1) per arco
+        for (ClusterEdge e : originalEdges) {
+            if (validNodesSet.contains(e.u) && validNodesSet.contains(e.v)) {
+                this.edges.add(e);
+            } else {
+                prunedEdgesCount++;
+            }
+        }
+        // Update N with the new number of "useful" nodes
+        this.N = this.nodes.size();
+
+        // Proceed with the normal logic...
         this.K_min = (int) Math.ceil((double) N / N_MAX);
         this.K_max = N / N_MIN;
 
-        // Map JAXB nodes to integers from 0 to N-1 for the Gurobi matrix
+        // Node index creation
         for (int i = 0; i < N; i++) {
-            nodeIndex.put(nodes.get(i), i);
+            nodeIndex.put(this.nodes.get(i), i);
         }
 
-        // Extraction of Firewall allocation places
+        // Allocation Places extraction
         this.Fw = new int[N];
-        //int totalAp = 0;
+        totalAp = 0;
         for (int i = 0; i < N; i++) {
-            Node n = nodes.get(i);
+            Node n = this.nodes.get(i);
             if (n.getFunctionalType() == null) {
                 totalAp += 1;
                 Fw[i] = 1;
@@ -92,18 +125,15 @@ public class GurobiClusterer {
             }
         }
 
-        // We can say with certainty that the number of allocation places in a cluster will never be greater than the minimum between the total number of AP and the maximum number of nodes in a cluster
         fw_upper_bound = Math.min(totalAp, N_MAX);
 
-        // Calculating the maximum numeber of hops, to have an upper bound instead of infinity
         for (int load : nodeLoads.values()) {
             flows_upper_bound += load;
         }
 
-        //System.out.println("Network name: " + networkName);
-        System.out.println("Gurobi Min-Cut Pre-processing completed:");
-        System.out.println(" - Total nodes in the topology : " + N);
-        System.out.println(" - Active edges (Weighted Edges) : " + edges.size());
+        System.out.println("Graph Pruning completed:");
+        System.out.println(" - Deleted nodes  : " + prunedNodesCount + " (Remaining: " + N + ")");
+        System.out.println(" - Deleted edges : " + prunedEdgesCount + " (Remaining: " + this.edges.size() + ")");
     }
 
     public void solve_ILP() throws GRBException {
@@ -111,7 +141,7 @@ public class GurobiClusterer {
         GRBEnv env = new GRBEnv(true);
         env.set(GRB.IntParam.OutputFlag, 0);
         env.start();
-        //env.set(GRB.DoubleParam.MIPGap, 0.05); // Stops when it reaches 95% of the absolute optimum
+        env.set(GRB.DoubleParam.MIPGap, 0.05); // Stops when it reaches 95% of the absolute optimum
         // Optional: set an absolute time limit (e.g., 3 minutes)
         //env.set(GRB.DoubleParam.TimeLimit, 180.0);
         GRBModel model = null;
@@ -339,7 +369,9 @@ public class GurobiClusterer {
     public static void setLambdaReachability(double lambda) { LAMBDA_REACHABILITY = lambda; }
     public static void setLambda3(double lambda) { LAMBDA_3 = lambda; }
     public static void setLambda4(double lambda) { LAMBDA_4 = lambda; }
-    //public static void setCurrentNetworkName(String name) { CURRENT_NETWORK_NAME = name; }
+
+    // Setter for testing purpose
+    public static void setStopAfterGurobi(Boolean stop_value) { stop_test = stop_value; }
 
     // Getters for Lambdas
     public static double getLambdaIsolation() { return LAMBDA_ISOLATION; }
@@ -355,4 +387,7 @@ public class GurobiClusterer {
     public static String getLastClusterNodeCounts() { return LAST_CLUSTER_NODE_COUNTS; }
     public static String getLastClusterFlowCounts() { return LAST_CLUSTER_FLOW_COUNTS; }
     public static String getLastClusterApCounts() { return LAST_CLUSTER_AP_COUNTS; }
+
+    // Getter for testing purpose
+    public static Boolean getStopAfterGurobi() { return stop_test; }
 }
