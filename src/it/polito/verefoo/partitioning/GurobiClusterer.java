@@ -76,23 +76,23 @@ public class GurobiClusterer {
         int prunedNodesCount = 0;
         int prunedEdgesCount = 0;
 
-        // Usiamo un Set per un controllo fulmineo degli archi successivi
+        // We use a Set for lightning-fast checking of the subsequent edges
         java.util.Set<Node> validNodesSet = new java.util.HashSet<>();
 
-        // 1. FILTRIAMO I NODI
+        // Filter the nodes
         for (Node n : originalNodes) {
             //boolean isAllocationPlace = (n.getFunctionalType() == null);
             int load = nodeLoads.getOrDefault(n, 0);
 
             if (load > 0) {
                 this.nodes.add(n);
-                validNodesSet.add(n); // Lo aggiungiamo anche al Set
+                validNodesSet.add(n); // We also add it to the Set
             } else {
                 prunedNodesCount++;
             }
         }
 
-        // 2. FILTRIAMO GLI ARCHI in tempo O(1) per arco
+        // Filter the edges in O(1) time per edge
         for (ClusterEdge e : originalEdges) {
             if (validNodesSet.contains(e.u) && validNodesSet.contains(e.v)) {
                 this.edges.add(e);
@@ -100,6 +100,7 @@ public class GurobiClusterer {
                 prunedEdgesCount++;
             }
         }
+
         // Update N with the new number of "useful" nodes
         this.N = this.nodes.size();
 
@@ -142,8 +143,8 @@ public class GurobiClusterer {
         env.set(GRB.IntParam.OutputFlag, 0);
         env.start();
         env.set(GRB.DoubleParam.MIPGap, 0.05); // Stops when it reaches 95% of the absolute optimum
-        // Optional: set an absolute time limit (e.g., 3 minutes)
-        //env.set(GRB.DoubleParam.TimeLimit, 180.0);
+        // Optional: set an absolute time limit (in this case 12 minutes)
+        env.set(GRB.DoubleParam.TimeLimit, 720.0);
         GRBModel model = null;
 
         try {
