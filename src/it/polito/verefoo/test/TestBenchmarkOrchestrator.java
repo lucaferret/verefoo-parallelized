@@ -42,29 +42,47 @@ public class TestBenchmarkOrchestrator {
     static double[] lambda4Vals     = {0.1, 0.5};  // Firewall balancing weight
 
     public static void main(String[] args) {
-        sendTelegramMessage("*Gurobi Benchmark Marathon Started!* \nHyperparameter grid search enabled.");
+        sendTelegramMessage("🏁 *Gurobi Benchmark Marathon Started!* \nAll 3 suites will run continuously. Hyperparameter grid search enabled.");
 
         // Force early exit to benchmark only the partitioning phase
         GurobiClusterer.setStopAfterGurobi(true);
         rand = new Random(baseSeed);
 
+        // ==========================================
+        // 1. RUN STANFORD BENCHMARK
+        // ==========================================
         try {
-            // 1. RUN STANFORD BENCHMARK
             runStanfordSuite();
-
-            // 2. RUN TEXAS2000 BENCHMARK
-            runTexasSuite();
-
-            // 3. RUN CESNET BENCHMARK
-            runCesnetSuite();
-
-            sendTelegramMessage("*Gurobi Benchmark Marathon Completed Successfully!* \nAll grid-search CSV files are ready for plotting.");
+            sendTelegramFile("results_stanford_gurobi_policies.csv");
         } catch (Exception e) {
-            sendTelegramMessage("*Marathon Aborted due to an unexpected fatal error:* \n" + e.getMessage());
+            sendTelegramMessage("*Fatal Error in Stanford Suite:* \n" + e.getMessage());
             e.printStackTrace();
         }
-    }
 
+        // ==========================================
+        // 2. RUN TEXAS2000 BENCHMARK
+        // ==========================================
+        try {
+            runTexasSuite();
+            sendTelegramFile("results_texas2000_gurobi_scalability.csv");
+        } catch (Exception e) {
+            sendTelegramMessage("*Fatal Error in Texas2000 Suite:* \n" + e.getMessage());
+            e.printStackTrace();
+        }
+
+        // ==========================================
+        // 3. RUN CESNET BENCHMARK
+        // ==========================================
+        try {
+            runCesnetSuite();
+            sendTelegramFile("results_cesnet_gurobi_policies.csv");
+        } catch (Exception e) {
+            sendTelegramMessage("*Fatal Error in Cesnet Suite:* \n" + e.getMessage());
+            e.printStackTrace();
+        }
+
+        sendTelegramMessage("*Gurobi Benchmark Marathon Finished!* \nCheck the logs above for any suite-specific errors.");
+    }
     // =========================================================================
     // 1. STANFORD SUITE
     // =========================================================================
@@ -276,6 +294,68 @@ public class TestBenchmarkOrchestrator {
             in.close();
         } catch (Exception e) {
             System.err.println("Connection failure with Telegram API Gateway: " + e.getMessage());
+        }
+    }
+
+    // =========================================================================
+    // TELEGRAM FILE UPLOADER (MULTIPART FORM-DATA GATEWAY)
+    // =========================================================================
+    private static void sendTelegramFile(String filePath) {
+        File file = new File(filePath);
+        if (!file.exists()) {
+            System.err.println("File not found for Telegram upload: " + filePath);
+            return;
+        }
+
+        String boundary = "===Boundary===" + System.currentTimeMillis();
+        String lineFeed = "\r\n";
+
+        try {
+            URL url = new URL("https://api.telegram.org/bot" + TELEGRAM_TOKEN + "/sendDocument");
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setDoOutput(true);
+            conn.setDoInput(true);
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+
+            java.io.OutputStream outputStream = conn.getOutputStream();
+            java.io.PrintWriter writer = new java.io.PrintWriter(new java.io.OutputStreamWriter(outputStream, "UTF-8"), true);
+
+            // 1. Append the chat_id field part
+            writer.append("--" + boundary).append(lineFeed);
+            writer.append("Content-Disposition: form-data; name=\"chat_id\"").append(lineFeed);
+            writer.append(lineFeed);
+            writer.append(TELEGRAM_CHAT_ID).append(lineFeed);
+            writer.flush();
+
+            // 2. Append the document file part header
+            writer.append("--" + boundary).append(lineFeed);
+            writer.append("Content-Disposition: form-data; name=\"document\"; filename=\"" + file.getName() + "\"").append(lineFeed);
+            writer.append("Content-Type: text/csv").append(lineFeed);
+            writer.append(lineFeed);
+            writer.flush();
+
+            // 3. Stream the raw file bytes directly to the connection output
+            byte[] fileBytes = Files.readAllBytes(Paths.get(filePath));
+            outputStream.write(fileBytes);
+            outputStream.flush();
+
+            // 4. Close the multipart form data boundary
+            writer.append(lineFeed);
+            writer.append("--" + boundary + "--").append(lineFeed);
+            writer.flush();
+            writer.close();
+
+            // Process response code to verify delivery
+            int responseCode = conn.getResponseCode();
+            if (responseCode == HttpURLConnection.HTTP_OK) {
+                System.out.println("File sent successfully via Telegram: " + file.getName());
+            } else {
+                System.err.println("Failed to send file via Telegram. HTTP code: " + responseCode);
+            }
+            conn.disconnect();
+        } catch (Exception e) {
+            System.err.println("Error uploading file to Telegram: " + e.getMessage());
         }
     }
 }
