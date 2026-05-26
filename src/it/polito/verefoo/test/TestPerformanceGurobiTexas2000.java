@@ -28,7 +28,7 @@ public class TestPerformanceGurobiTexas2000 {
     static boolean withPorts = false;
     static boolean withIsolation = true;
     static int isolationBound = 30;
-    static final int runsPerConfig = 1; // Averaged over 3 runs for robustness
+    static final int runsPerConfig = 3; // Averaged over 3 runs for robustness
 
     public static void main(String[] args) {
         System.out.println("Starting Gurobi Min-Cut Scalability Test on Texas2000 topology...");

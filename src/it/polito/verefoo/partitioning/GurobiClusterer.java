@@ -81,10 +81,10 @@ public class GurobiClusterer {
 
         // 1. FILTRIAMO I NODI
         for (Node n : originalNodes) {
-            boolean isAllocationPlace = (n.getFunctionalType() == null);
+            //boolean isAllocationPlace = (n.getFunctionalType() == null);
             int load = nodeLoads.getOrDefault(n, 0);
 
-            if (load > 0 || isAllocationPlace) {
+            if (load > 0) {
                 this.nodes.add(n);
                 validNodesSet.add(n); // Lo aggiungiamo anche al Set
             } else {
