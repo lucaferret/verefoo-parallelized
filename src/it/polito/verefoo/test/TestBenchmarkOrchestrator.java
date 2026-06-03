@@ -30,13 +30,13 @@ public class TestBenchmarkOrchestrator {
     private static final String TELEGRAM_CHAT_ID = "YOUR_CHAT_ID_HERE";
 
     // --- BENCHMARK CONFIGURATION ---
-    private static final int RUNS_PER_CONFIG = 20; // 20 runs for robust average data
+    private static final int RUNS_PER_CONFIG = 10; // 20 runs for robust average data
     static int baseSeed = 999;
     static Random rand;
 
     // --- HYPERPARAMETER ARRAYS (LAMBDAS) ---
     // You can freely add or remove values here to test multiple combinations
-    static double[] lambdaIsoVals   = {1.0, 2.0};
+    static double[] lambdaIsoVals   = {1.0, 0.8};
     static double[] lambdaReachVals = {0.2, 0.5};
     static double[] lambda3Vals     = {0.5};       // Load balancing weight
     static double[] lambda4Vals     = {0.1, 0.5};  // Firewall balancing weight
@@ -51,6 +51,7 @@ public class TestBenchmarkOrchestrator {
         // ==========================================
         // 1. RUN STANFORD BENCHMARK
         // ==========================================
+
         try {
             runStanfordSuite();
             sendTelegramFile("results_stanford_gurobi_policies.csv");
@@ -58,6 +59,7 @@ public class TestBenchmarkOrchestrator {
             sendTelegramMessage("*Fatal Error in Stanford Suite:* \n" + e.getMessage());
             e.printStackTrace();
         }
+
 
         // ==========================================
         // 2. RUN TEXAS2000 BENCHMARK
@@ -91,7 +93,7 @@ public class TestBenchmarkOrchestrator {
         String csvPath = "results_stanford_gurobi_policies.csv";
         prepareCsvHeader(csvPath, "NetworkName,Policies,ReachPerc,CompleteReachPerc,PortPerc,Algorithm,LambdaIso,LambdaReach,Lambda3,Lambda4,AvgGurobiTime_s,AvgObjValue,AvgActiveClusters,ClusterNodeCounts,ClusterFlowCounts,ClusterAPCounts\n");
 
-        int[] numberPRs = {10, 20, 30, 40, 50, 60, 80, 100};
+        int[] numberPRs = {10, 20, 30, 40, 50, 60, 80};
         String[] algorithms = {"MF", "AP"};
 
         for (int pr : numberPRs) {
@@ -153,7 +155,7 @@ public class TestBenchmarkOrchestrator {
         String csvPath = "results_cesnet_gurobi_policies.csv";
         prepareCsvHeader(csvPath, "NetworkName,Policies,ReachPerc,Algorithm,LambdaIso,LambdaReach,Lambda3,Lambda4,AvgGurobiTime_s,AvgObjValue,AvgActiveClusters,ClusterNodeCounts,ClusterFlowCounts,ClusterAPCounts\n");
 
-        int[] policyNumbers = {50, 100, 200, 300, 400, 500};
+        int[] policyNumbers = {10, 20, 30, 40, 45, 50};
         String[] algorithms = {"MF", "AP"};
 
         for (int policyNum : policyNumbers) {

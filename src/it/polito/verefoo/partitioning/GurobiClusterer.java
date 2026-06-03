@@ -142,10 +142,23 @@ public class GurobiClusterer {
         GRBEnv env = new GRBEnv(true);
         env.set(GRB.IntParam.OutputFlag, 0);
         env.start();
-        env.set(GRB.DoubleParam.MIPGap, 0.05); // Stops when it reaches 95% of the absolute optimum
+        //env.set(GRB.DoubleParam.MIPGap, 0.05); // Stops when it reaches 95% of the absolute optimum
         // Optional: set an absolute time limit (in this case 12 minutes)
-        env.set(GRB.DoubleParam.TimeLimit, 720.0);
+        // This is a soft limit checked at specific interval. When the limit expires, gurobi don't terminate immediately, but it first completes its current node
+        // or algorithmic step to save the best feasible solution it has found so far.
+        env.set(GRB.DoubleParam.TimeLimit, 60.0);
         GRBModel model = null;
+
+        // how to optimize even more
+        // 2. Limit the Presolve phase.
+        // Presolve can sometimes take longer than the actual optimization on dense graphs.
+        // '1' means standard presolve (default is usually -1/automatic which can be too aggressive)
+        env.set(GRB.IntParam.Presolve, 1);
+
+        // 3. Change the Method used for the Root Node.
+        // Default (-1) lets Gurobi choose, often picking 'Concurrent' (running all algorithms at once).
+        // Setting it to '2' forces the Barrier method, which is generally faster and more predictable for large, sparse network graphs.
+        env.set(GRB.IntParam.Method, 2);
 
         try {
             model = new GRBModel(env);
