@@ -141,14 +141,6 @@ public class GurobiClusterer {
         // Initialization of the Gurobi environment (OutputFlag = 0 to silence verbose logs)
         GRBEnv env = new GRBEnv(true);
         env.set(GRB.IntParam.OutputFlag, 0);
-        env.start();
-        //env.set(GRB.DoubleParam.MIPGap, 0.05); // Stops when it reaches 95% of the absolute optimum
-        // Optional: set an absolute time limit (in this case 12 minutes)
-        // This is a soft limit checked at specific interval. When the limit expires, gurobi don't terminate immediately, but it first completes its current node
-        // or algorithmic step to save the best feasible solution it has found so far.
-        env.set(GRB.DoubleParam.TimeLimit, 60.0);
-        GRBModel model = null;
-
         // how to optimize even more
         // 2. Limit the Presolve phase.
         // Presolve can sometimes take longer than the actual optimization on dense graphs.
@@ -160,8 +152,19 @@ public class GurobiClusterer {
         // Setting it to '2' forces the Barrier method, which is generally faster and more predictable for large, sparse network graphs.
         env.set(GRB.IntParam.Method, 2);
 
+        env.start();
+        //env.set(GRB.DoubleParam.MIPGap, 0.05); // Stops when it reaches 95% of the absolute optimum
+        // Optional: set an absolute time limit (in this case 12 minutes)
+        // This is a soft limit checked at specific interval. When the limit expires, gurobi don't terminate immediately, but it first completes its current node
+        // or algorithmic step to save the best feasible solution it has found so far.
+        GRBModel model = null;
+
+
+        // if the parameter controls how Gurobi thinks, set it on env. If it controls when Gurobi stops, set it on model
         try {
             model = new GRBModel(env);
+            model.set(GRB.DoubleParam.TimeLimit, 60.0);
+
             int numEdges = edges.size();
 
             // Decision Variables
@@ -289,8 +292,6 @@ public class GurobiClusterer {
             model.setObjective(objective, GRB.MINIMIZE);
 
             // Solver Execution
-
-            model.write("my_min_cut_model.lp"); // Useful for debugging
             model.optimize();
 
             // Output and results check
