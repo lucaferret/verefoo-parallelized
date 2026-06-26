@@ -181,9 +181,9 @@ public class VerefooProxy {
 			if (path.size() <= 1) continue;
 
 			Property p = fp.getRequirement().getOriginalProperty();
-			double lambda = (p.getName() == PName.ISOLATION_PROPERTY)
+			double lambda = GurobiClusterer.getLambdaOptimization();/*(p.getName() == PName.ISOLATION_PROPERTY)
 					? GurobiClusterer.getLambdaIsolation()
-					: GurobiClusterer.getLambdaReachability();
+					: GurobiClusterer.getLambdaReachability();*/
 
 			// Node load calculation (We start from i=1 to exclude the source/client node)
 			for (int i = 1; i < path.size(); i++) {
@@ -303,9 +303,9 @@ public class VerefooProxy {
 			if (path.size() <= 1) continue;
 
 			Property p = fp.getRequirement().getOriginalProperty();
-			double lambda = (p.getName() == PName.ISOLATION_PROPERTY)
+			double lambda = GurobiClusterer.getLambdaOptimization();/*(p.getName() == PName.ISOLATION_PROPERTY)
 					? GurobiClusterer.getLambdaIsolation()
-					: GurobiClusterer.getLambdaReachability();
+					: GurobiClusterer.getLambdaReachability();*/
 
 			// Node Load Calculation (We start from i=1 to exclude the source/client node)
 			for (int i = 1; i < path.size(); i++) {

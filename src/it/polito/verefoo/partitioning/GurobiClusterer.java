@@ -31,10 +31,15 @@ public class GurobiClusterer {
     private static String LAST_CLUSTER_AP_COUNTS = "";
     private static int totalAp = 0;
     // Public constants so VerefooProxy can use them to calculate the weight of the edges
+    /*
     private static double LAMBDA_ISOLATION = 0.9;
     private static double LAMBDA_REACHABILITY = 0.6;
     private static double LAMBDA_3 = 0.5;  // Weight for network load balancing
     private static double LAMBDA_4 = 0.9; // Weight for Firewall balancing
+    */
+    private static double LAMBDA_OPTIMIZATION = 1;
+    private static double LAMBDA_PERFORMANCE = 0.6;
+
 
     // Name of the analyzed network
     //private static String CURRENT_NETWORK_NAME = "Unknown_Network";
@@ -152,6 +157,10 @@ public class GurobiClusterer {
         // Setting it to '2' forces the Barrier method, which is generally faster and more predictable for large, sparse network graphs.
         env.set(GRB.IntParam.Method, 2);
 
+        //env.set(GRB.IntParam.BarIterLimit, 200); // cap Barrier iterations
+        //env.set(GRB.DoubleParam.NodeLimit, 5.0);
+        env.set(GRB.DoubleParam.TimeLimit, 60.0); // move here, on env
+
         env.start();
         //env.set(GRB.DoubleParam.MIPGap, 0.05); // Stops when it reaches 95% of the absolute optimum
         // Optional: set an absolute time limit (in this case 12 minutes)
@@ -164,6 +173,7 @@ public class GurobiClusterer {
         try {
             model = new GRBModel(env);
             model.set(GRB.DoubleParam.TimeLimit, 60.0);
+            //model.set(GRB.DoubleParam.NodeLimit, 30.0); // hard cap on B&B nodes
 
             int numEdges = edges.size();
 
@@ -282,12 +292,12 @@ public class GurobiClusterer {
             // Add the edge cuts: if Z[e] is 1 (cut), we pay the 'weight' of the edge
             for (int e = 0; e < numEdges; e++) {
                 double weight = edges.get(e).weight;
-                objective.addTerm(weight, Z[e]);
+                objective.addTerm(LAMBDA_OPTIMIZATION * weight, Z[e]);
             }
 
             // Push down the maximum peak of loads and firewalls to balance them
-            objective.addTerm(LAMBDA_3, maxFlows);
-            objective.addTerm(LAMBDA_4, maxFw);
+            objective.addTerm(LAMBDA_PERFORMANCE, maxFlows);
+            objective.addTerm(LAMBDA_PERFORMANCE, maxFw);
 
             model.setObjective(objective, GRB.MINIMIZE);
 
@@ -380,19 +390,23 @@ public class GurobiClusterer {
 
     // Statics Getters and Setters
     // Setters per le Lambda (utilizzati dal Test Runner)
-    public static void setLambdaIsolation(double lambda) { LAMBDA_ISOLATION = lambda; }
-    public static void setLambdaReachability(double lambda) { LAMBDA_REACHABILITY = lambda; }
-    public static void setLambda3(double lambda) { LAMBDA_3 = lambda; }
-    public static void setLambda4(double lambda) { LAMBDA_4 = lambda; }
+    //public static void setLambdaIsolation(double lambda) { LAMBDA_ISOLATION = lambda; }
+    //public static void setLambdaReachability(double lambda) { LAMBDA_REACHABILITY = lambda; }
+    //public static void setLambda3(double lambda) { LAMBDA_3 = lambda; }
+    //public static void setLambda4(double lambda) { LAMBDA_4 = lambda; }
+    public static void setLambdaOptimization(double lambda) { LAMBDA_OPTIMIZATION = lambda; }
+    public static void setLambdaPerformance(double lambda) { LAMBDA_PERFORMANCE = lambda;  }
 
     // Setter for testing purpose
     public static void setStopAfterGurobi(Boolean stop_value) { stop_test = stop_value; }
 
     // Getters for Lambdas
-    public static double getLambdaIsolation() { return LAMBDA_ISOLATION; }
-    public static double getLambdaReachability() { return LAMBDA_REACHABILITY; }
-    public static double getLambda3() { return LAMBDA_3; }
-    public static double getLambda4() { return LAMBDA_4; }
+    //public static double getLambdaIsolation() { return LAMBDA_ISOLATION; }
+    //public static double getLambdaReachability() { return LAMBDA_REACHABILITY; }
+    //public static double getLambda3() { return LAMBDA_3; }
+    //public static double getLambda4() { return LAMBDA_4; }
+    public static double getLambdaOptimization() { return LAMBDA_OPTIMIZATION; }
+    public static double getLambdaPerformance() { return LAMBDA_PERFORMANCE; }
 
     // Getters for Results
     public static double getLastObjValue() { return OBJECTIVE_RESULT; }

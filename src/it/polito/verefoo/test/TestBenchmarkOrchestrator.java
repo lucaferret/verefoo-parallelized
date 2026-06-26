@@ -30,19 +30,16 @@ public class TestBenchmarkOrchestrator {
     private static final String TELEGRAM_CHAT_ID = "YOUR_CHAT_ID_HERE";
 
     // --- BENCHMARK CONFIGURATION ---
-    private static final int RUNS_PER_CONFIG = 10; // 20 runs for robust average data
+    private static final int RUNS_PER_CONFIG = 10;
     static int baseSeed = 999;
     static Random rand;
 
     // --- HYPERPARAMETER ARRAYS (LAMBDAS) ---
-    // You can freely add or remove values here to test multiple combinations
-    static double[] lambdaIsoVals   = {1.0, 0.8};
-    static double[] lambdaReachVals = {0.2, 0.5};
-    static double[] lambda3Vals     = {0.5};       // Load balancing weight
-    static double[] lambda4Vals     = {0.1, 0.5};  // Firewall balancing weight
+    static double[] lambdaOptimizationVals = {0.0, 0.3, 0.6, 1.0};
+    static double[] lambdaPerformanceVals  = {0.0, 0.3, 0.6, 1.0};
 
     public static void main(String[] args) {
-        sendTelegramMessage("🏁 *Gurobi Benchmark Marathon Started!* \nAll 3 suites will run continuously. Hyperparameter grid search enabled.");
+        sendTelegramMessage("*Gurobi Benchmark Marathon Started!* \nAll 3 suites will run continuously. Hyperparameter grid search enabled.");
 
         // Force early exit to benchmark only the partitioning phase
         GurobiClusterer.setStopAfterGurobi(true);
@@ -51,7 +48,7 @@ public class TestBenchmarkOrchestrator {
         // ==========================================
         // 1. RUN STANFORD BENCHMARK
         // ==========================================
-
+        /*
         try {
             runStanfordSuite();
             sendTelegramFile("results_stanford_gurobi_policies.csv");
@@ -59,7 +56,6 @@ public class TestBenchmarkOrchestrator {
             sendTelegramMessage("*Fatal Error in Stanford Suite:* \n" + e.getMessage());
             e.printStackTrace();
         }
-
 
         // ==========================================
         // 2. RUN TEXAS2000 BENCHMARK
@@ -71,7 +67,7 @@ public class TestBenchmarkOrchestrator {
             sendTelegramMessage("*Fatal Error in Texas2000 Suite:* \n" + e.getMessage());
             e.printStackTrace();
         }
-
+        */
         // ==========================================
         // 3. RUN CESNET BENCHMARK
         // ==========================================
@@ -85,27 +81,25 @@ public class TestBenchmarkOrchestrator {
 
         sendTelegramMessage("*Gurobi Benchmark Marathon Finished!* \nCheck the logs above for any suite-specific errors.");
     }
+
     // =========================================================================
     // 1. STANFORD SUITE
     // =========================================================================
     private static void runStanfordSuite() {
         sendTelegramMessage("*[1/3] Starting Stanford Suite with Lambda Grid Search...*");
         String csvPath = "results_stanford_gurobi_policies.csv";
-        prepareCsvHeader(csvPath, "NetworkName,Policies,ReachPerc,CompleteReachPerc,PortPerc,Algorithm,LambdaIso,LambdaReach,Lambda3,Lambda4,AvgGurobiTime_s,AvgObjValue,AvgActiveClusters,ClusterNodeCounts,ClusterFlowCounts,ClusterAPCounts\n");
+        prepareCsvHeader(csvPath, "NetworkName,Policies,ReachPerc,CompleteReachPerc,PortPerc,Algorithm,LambdaOptimization,LambdaPerformance,AvgGurobiTime_s,AvgObjValue,AvgActiveClusters,ClusterNodeCounts,ClusterFlowCounts,ClusterAPCounts\n");
 
         int[] numberPRs = {10, 20, 30, 40, 50, 60, 80};
         String[] algorithms = {"MF", "AP"};
 
         for (int pr : numberPRs) {
             for (String algo : algorithms) {
-                for (double lIso : lambdaIsoVals) {
-                    for (double lReach : lambdaReachVals) {
-                        for (double l3 : lambda3Vals) {
-                            for (double l4 : lambda4Vals) {
-                                String networkName = "Stanford_" + pr + "PR";
-                                executeBenchmarkStep(csvPath, networkName, algo, pr, 0.5, 0.3, 0.1, 1, lIso, lReach, l3, l4);
-                            }
-                        }
+                for (double lOpt : lambdaOptimizationVals) {
+                    for (double lPerf : lambdaPerformanceVals) {
+                        if (lOpt == 0 && lPerf == 0) continue;
+                        String networkName = "Stanford_" + pr + "PR";
+                        executeBenchmarkStep(csvPath, networkName, algo, pr, 0.5, 0.3, 0.1, 1, lOpt, lPerf);
                     }
                 }
             }
@@ -119,7 +113,7 @@ public class TestBenchmarkOrchestrator {
     private static void runTexasSuite() {
         sendTelegramMessage("*[2/3] Starting Texas2000 Suite with Lambda Grid Search...*");
         String csvPath = "results_texas2000_gurobi_scalability.csv";
-        prepareCsvHeader(csvPath, "NetworkName,UCC,SS,TotalNodes,TotalFirewalls,Algorithm,LambdaIso,LambdaReach,Lambda3,Lambda4,AvgGurobiTime_s,AvgObjValue,AvgActiveClusters,ClusterNodeCounts,ClusterFlowCounts,ClusterAPCounts\n");
+        prepareCsvHeader(csvPath, "NetworkName,UCC,SS,TotalNodes,TotalFirewalls,Algorithm,LambdaOptimization,LambdaPerformance,AvgGurobiTime_s,AvgObjValue,AvgActiveClusters,ClusterNodeCounts,ClusterFlowCounts,ClusterAPCounts\n");
 
         int[][] networkSizes = {
                 {1, 1}, {1, 2}, {2, 1}, {2, 2}, {2, 3}, {2, 4},
@@ -133,13 +127,10 @@ public class TestBenchmarkOrchestrator {
             int ss = size[1];
             String networkName = "Texas_UCC" + ucc + "_SS" + ss;
             for (String algo : algorithms) {
-                for (double lIso : lambdaIsoVals) {
-                    for (double lReach : lambdaReachVals) {
-                        for (double l3 : lambda3Vals) {
-                            for (double l4 : lambda4Vals) {
-                                executeBenchmarkStep(csvPath, networkName, algo, ucc, ss, 0, 0, 2, lIso, lReach, l3, l4);
-                            }
-                        }
+                for (double lOpt : lambdaOptimizationVals) {
+                    for (double lPerf : lambdaPerformanceVals) {
+                        if (lOpt == 0 && lPerf == 0) continue;
+                        executeBenchmarkStep(csvPath, networkName, algo, ucc, ss, 0, 0, 2, lOpt, lPerf);
                     }
                 }
             }
@@ -153,21 +144,18 @@ public class TestBenchmarkOrchestrator {
     private static void runCesnetSuite() {
         sendTelegramMessage("*[3/3] Starting CESNET Suite with Lambda Grid Search...*");
         String csvPath = "results_cesnet_gurobi_policies.csv";
-        prepareCsvHeader(csvPath, "NetworkName,Policies,ReachPerc,Algorithm,LambdaIso,LambdaReach,Lambda3,Lambda4,AvgGurobiTime_s,AvgObjValue,AvgActiveClusters,ClusterNodeCounts,ClusterFlowCounts,ClusterAPCounts\n");
+        prepareCsvHeader(csvPath, "NetworkName,Policies,ReachPerc,Algorithm,LambdaOptimization,LambdaPerformance,AvgGurobiTime_s,AvgObjValue,AvgActiveClusters,ClusterNodeCounts,ClusterFlowCounts,ClusterAPCounts\n");
 
         int[] policyNumbers = {10, 20, 30, 40, 45, 50};
         String[] algorithms = {"MF", "AP"};
 
         for (int policyNum : policyNumbers) {
             for (String algo : algorithms) {
-                for (double lIso : lambdaIsoVals) {
-                    for (double lReach : lambdaReachVals) {
-                        for (double l3 : lambda3Vals) {
-                            for (double l4 : lambda4Vals) {
-                                String networkName = "Cesnet_" + policyNum + "Pol";
-                                executeBenchmarkStep(csvPath, networkName, algo, policyNum, 0.5, 0, 0, 3, lIso, lReach, l3, l4);
-                            }
-                        }
+                for (double lOpt : lambdaOptimizationVals) {
+                    for (double lPerf : lambdaPerformanceVals) {
+                        if (lOpt == 0 && lPerf == 0) continue;
+                        String networkName = "Cesnet_" + policyNum + "Pol";
+                        executeBenchmarkStep(csvPath, networkName, algo, policyNum, 0.5, 0, 0, 3, lOpt, lPerf);
                     }
                 }
             }
@@ -178,20 +166,24 @@ public class TestBenchmarkOrchestrator {
     // =========================================================================
     // CORE EXECUTION STEP ENGINE
     // =========================================================================
-    private static void executeBenchmarkStep(String csvPath, String networkName, String algo, double p1, double p2, double p3, double p4, int suiteId, double lIso, double lReach, double l3, double l4) {
+    private static void executeBenchmarkStep(String csvPath, String networkName, String algo,
+                                             double p1, double p2, double p3, double p4,
+                                             int suiteId, double lOpt, double lPerf) {
 
         // Dynamic configuration of hyperparameters for this specific grid point
-        GurobiClusterer.setLambdaIsolation(lIso);
-        GurobiClusterer.setLambdaReachability(lReach);
-        GurobiClusterer.setLambda3(l3);
-        GurobiClusterer.setLambda4(l4);
+        GurobiClusterer.setLambdaOptimization(lOpt);
+        GurobiClusterer.setLambdaPerformance(lPerf);
 
-        double sumGurobiTime = 0.0; double sumObjValue = 0.0; double sumActiveClusters = 0.0;
+        double sumGurobiTime = 0.0;
+        double sumObjValue = 0.0;
+        double sumActiveClusters = 0.0;
         int validRuns = 0;
-        String clusterNodes = ""; String clusterFlows = ""; String clusterAps = "";
+        String clusterNodes = "";
+        String clusterFlows = "";
+        String clusterAps = "";
 
-        System.out.printf("Executing: %s [%s] | Lambdas: Iso=%.1f, Reach=%.1f, L3=%.1f, L4=%.1f\n",
-                networkName, algo, lIso, lReach, l3, l4);
+        System.out.printf("Executing: %s [%s] | Lambdas: Opt=%.1f, Perf=%.1f\n",
+                networkName, algo, lOpt, lPerf);
 
         for (int k = 0; k < RUNS_PER_CONFIG; k++) {
             try {
@@ -199,13 +191,13 @@ public class TestBenchmarkOrchestrator {
                 NFV root = null;
 
                 if (suiteId == 1) { // Stanford
-                    TestCaseGeneratorStanford gen = new TestCaseGeneratorStanford(networkName + "_r" + k, (int)p1, runSeed, p2, p3, p4);
+                    TestCaseGeneratorStanford gen = new TestCaseGeneratorStanford(networkName + "_r" + k, (int) p1, runSeed, p2, p3, p4);
                     root = gen.getNfv();
                 } else if (suiteId == 2) { // Texas
-                    TestCaseGeneratorTexas2000 gen = new TestCaseGeneratorTexas2000(runSeed, (int)p1, (int)p2, false, true, 30);
-                    root = gen.generateNFV((int)p1, (int)p2, false, true, 30);
+                    TestCaseGeneratorTexas2000 gen = new TestCaseGeneratorTexas2000(runSeed, (int) p1, (int) p2, false, true, 30);
+                    root = gen.generateNFV((int) p1, (int) p2, false, true, 30);
                 } else if (suiteId == 3) { // Cesnet
-                    TestCaseGeneratorCesnet gen = new TestCaseGeneratorCesnet("testfile/CESNET/cesnet1", true, (int)p1, p2, true);
+                    TestCaseGeneratorCesnet gen = new TestCaseGeneratorCesnet("testfile/CESNET/cesnet1", true, (int) p1, p2, true);
                     root = gen.getNFV();
                 }
 
@@ -227,29 +219,37 @@ public class TestBenchmarkOrchestrator {
                 validRuns++;
 
             } catch (Exception e) {
-                System.err.println("⚠ Run error or Gurobi Timeout in " + networkName + ": " + e.getMessage());
+                System.err.println("Run error or Gurobi Timeout in " + networkName + ": " + e.getMessage());
             }
         }
 
-        double avgTime = validRuns > 0 ? sumGurobiTime / validRuns : 0.0;
-        double avgObj = validRuns > 0 ? sumObjValue / validRuns : 0.0;
+        double avgTime     = validRuns > 0 ? sumGurobiTime    / validRuns : 0.0;
+        double avgObj      = validRuns > 0 ? sumObjValue      / validRuns : 0.0;
         double avgClusters = validRuns > 0 ? sumActiveClusters / validRuns : 0.0;
 
         String csvRow;
         if (suiteId == 1) {
-            csvRow = String.format(java.util.Locale.US, "%s,%d,%.2f,%.2f,%.2f,%s,%.1f,%.1f,%.1f,%.1f,%.3f,%.2f,%.1f,\"%s\",\"%s\",\"%s\"",
-                    networkName, (int)p1, p2, p3, p4, algo, lIso, lReach, l3, l4, avgTime, avgObj, avgClusters, clusterNodes, clusterFlows, clusterAps);
+            csvRow = String.format(java.util.Locale.US,
+                    "%s,%d,%.2f,%.2f,%.2f,%s,%.1f,%.1f,%.3f,%.2f,%.1f,\"%s\",\"%s\",\"%s\"",
+                    networkName, (int) p1, p2, p3, p4, algo, lOpt, lPerf,
+                    avgTime, avgObj, avgClusters, clusterNodes, clusterFlows, clusterAps);
         } else if (suiteId == 2) {
-            int nodes = 3 + 17 * (int)p1 + 14 * (int)p2;
-            int fws = 1 + 3 * (int)p1 + 2 * (int)p2;
-            csvRow = String.format(java.util.Locale.US, "%s,%d,%d,%d,%d,%s,%.1f,%.1f,%.1f,%.1f,%.3f,%.2f,%.1f,\"%s\",\"%s\",\"%s\"",
-                    networkName, (int)p1, (int)p2, nodes, fws, algo, lIso, lReach, l3, l4, avgTime, avgObj, avgClusters, clusterNodes, clusterFlows, clusterAps);
+            int nodes = 3 + 17 * (int) p1 + 14 * (int) p2;
+            int fws   = 1 +  3 * (int) p1 +  2 * (int) p2;
+            csvRow = String.format(java.util.Locale.US,
+                    "%s,%d,%d,%d,%d,%s,%.1f,%.1f,%.3f,%.2f,%.1f,\"%s\",\"%s\",\"%s\"",
+                    networkName, (int) p1, (int) p2, nodes, fws, algo, lOpt, lPerf,
+                    avgTime, avgObj, avgClusters, clusterNodes, clusterFlows, clusterAps);
         } else {
-            csvRow = String.format(java.util.Locale.US, "%s,%d,%.2f,%s,%.1f,%.1f,%.1f,%.1f,%.3f,%.2f,%.1f,\"%s\",\"%s\",\"%s\"",
-                    networkName, (int)p1, p2, algo, lIso, lReach, l3, l4, avgTime, avgObj, avgClusters, clusterNodes, clusterFlows, clusterAps);
+            csvRow = String.format(java.util.Locale.US,
+                    "%s,%d,%.2f,%s,%.1f,%.1f,%.3f,%.2f,%.1f,\"%s\",\"%s\",\"%s\"",
+                    networkName, (int) p1, p2, algo, lOpt, lPerf,
+                    avgTime, avgObj, avgClusters, clusterNodes, clusterFlows, clusterAps);
         }
 
-        try (BufferedWriter rowWriter = Files.newBufferedWriter(Paths.get(csvPath), java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND)) {
+        try (BufferedWriter rowWriter = Files.newBufferedWriter(Paths.get(csvPath),
+                java.nio.file.StandardOpenOption.CREATE,
+                java.nio.file.StandardOpenOption.APPEND)) {
             rowWriter.write(csvRow + "\n");
         } catch (Exception e) {
             System.err.println("Fatal CSV writing error: " + e.getMessage());
@@ -257,8 +257,9 @@ public class TestBenchmarkOrchestrator {
 
         // Send updates for meaningful thresholds to monitor progress on Telegram
         if (avgTime > 30.0 || networkName.contains("60PR") || networkName.contains("300Pol") || networkName.contains("UCC3")) {
-            sendTelegramMessage(String.format("*Grid Search Step Update* \nNet: `%s` [%s]\nLambdas: `[%.1f, %.1f, %.1f, %.1f]`\nAvg Time: `%.2fs` \nObj: `%.2f`",
-                    networkName, algo, lIso, lReach, l3, l4, avgTime, avgObj));
+            sendTelegramMessage(String.format(
+                    "*Grid Search Step Update* \nNet: `%s` [%s]\nLambdas: `[Opt=%.1f, Perf=%.1f]`\nAvg Time: `%.2fs` \nObj: `%.2f`",
+                    networkName, algo, lOpt, lPerf, avgTime, avgObj));
         }
     }
 
