@@ -56,7 +56,7 @@ public class TestBenchmarkOrchestrator {
             sendTelegramMessage("*Fatal Error in Stanford Suite:* \n" + e.getMessage());
             e.printStackTrace();
         }
-
+        */
         // ==========================================
         // 2. RUN TEXAS2000 BENCHMARK
         // ==========================================
@@ -67,7 +67,7 @@ public class TestBenchmarkOrchestrator {
             sendTelegramMessage("*Fatal Error in Texas2000 Suite:* \n" + e.getMessage());
             e.printStackTrace();
         }
-        */
+
         // ==========================================
         // 3. RUN CESNET BENCHMARK
         // ==========================================
@@ -207,6 +207,7 @@ public class TestBenchmarkOrchestrator {
                 Schema schema = sf.newSchema(new File("./xsd/nfvSchema.xsd"));
                 u.setSchema(schema);
 
+                GurobiClusterer.resetLastResults();
                 new VerefooSerializer(root, algo);
 
                 sumGurobiTime += GurobiClusterer.getLastExecTime();

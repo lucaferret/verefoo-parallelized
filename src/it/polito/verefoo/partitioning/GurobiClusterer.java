@@ -419,4 +419,13 @@ public class GurobiClusterer {
 
     // Getter for testing purpose
     public static Boolean getStopAfterGurobi() { return stop_test; }
+
+    public static void resetLastResults() {
+        EXECUTION_TIME = 0.0;
+        OBJECTIVE_RESULT = 0.0;
+        ACTIVE_CLUSTERS = 0;
+        LAST_CLUSTER_NODE_COUNTS = "";
+        LAST_CLUSTER_FLOW_COUNTS = "";
+        LAST_CLUSTER_AP_COUNTS = "";
+    }
 }

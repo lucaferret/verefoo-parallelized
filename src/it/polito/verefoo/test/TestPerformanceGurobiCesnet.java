@@ -92,6 +92,7 @@ public class TestPerformanceGurobiCesnet {
 
                                     NFV root = generator.getNFV();
 
+                                    GurobiClusterer.resetLastResults();
                                     new VerefooSerializer(root, algo);
 
                                     sumGurobiTime += GurobiClusterer.getLastExecTime();

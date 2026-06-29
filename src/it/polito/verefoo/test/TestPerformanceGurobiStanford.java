@@ -116,6 +116,7 @@ public class TestPerformanceGurobiStanford {
 
                                         NFV root = generator.getNfv();
 
+                                        GurobiClusterer.resetLastResults();
                                         new VerefooSerializer(root, algo);
 
                                         sumGurobiTime += GurobiClusterer.getLastExecTime();

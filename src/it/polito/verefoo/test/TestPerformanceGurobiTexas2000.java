@@ -111,6 +111,7 @@ public class TestPerformanceGurobiTexas2000 {
 
                                     NFV root = generator.generateNFV(numberUCC, numberSS, withPorts, withIsolation, isolationBound);
 
+                                    GurobiClusterer.resetLastResults();
                                     new VerefooSerializer(root, algo);
 
                                     sumGurobiTime += GurobiClusterer.getLastExecTime();
