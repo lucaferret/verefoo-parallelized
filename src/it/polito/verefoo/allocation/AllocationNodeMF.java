@@ -117,7 +117,11 @@ public class AllocationNodeMF extends AllocationNode {
 			return mapFlowIdPredicatesInInput.get(flowId);
 		return null;
 	}
-	
+
+	public void setPredicatesInInputForFlow(Map<Integer, Map<Integer, Predicate>> predicatesInInputForFlow) {
+		this.mapFlowIdPredicatesInInput = predicatesInInputForFlow;
+	}
+
 	public void addForwardedPredicate(Predicate predicate) {
 		forwardedPredicateList.add(predicate);
 	}
@@ -125,4 +129,34 @@ public class AllocationNodeMF extends AllocationNode {
 	public void addDroppedPredicate(Predicate predicate) {
 		droppedPredicateList.add(predicate);
 	}
+
+	public AllocationNodeMF clone() {
+		AllocationNodeMF an = new AllocationNodeMF(cloneNode(node));
+		an.setDroppedPredicateList(droppedPredicateList);
+		an.setIpAddress(ipAddress);
+		an.setFlows(new HashMap<Integer, FlowPathMF>());
+		an.setForwardedPredicateList(forwardedPredicateList);
+		an.setPredicatesInInputForFlow(mapFlowIdPredicatesInInput);
+		return an;
+	}
+
+	private Neighbour cloneNeighbour(Neighbour ne) {
+		Neighbour n = new Neighbour();
+		n.setId(ne.getId());
+		n.setName(ne.getName());
+		return n;
+	}
+
+	private Node cloneNode(Node node) {
+		Node n = new Node();
+		n.setConfiguration(node.getConfiguration());
+		n.setFunctionalType(node.getFunctionalType());
+		n.setId(node.getId());
+		n.setName(node.getName());
+		for (Neighbour ne : node.getNeighbour())
+			n.getNeighbour().add(cloneNeighbour(ne));
+
+		return n;
+	}
+
 }

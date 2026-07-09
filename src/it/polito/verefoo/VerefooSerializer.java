@@ -68,18 +68,20 @@ public class VerefooSerializer {
 					throw new BadGraphError("No property defined for the Graph " + g.getId(),
 							EType.INVALID_PROPERTY_DEFINITION);
 				VerefooProxy test = new VerefooProxy(g, root.getHosts(), root.getConnections(), root.getConstraints(),
-						prop, paths, AlgoUsed);
+						prop, paths, AlgoUsed, Boolean.TRUE);
 
 				// Extract results to avoid NullPointerException
 				testResults = test.getTestTimeResults();
 
 				// Early Exit: Stop VEREFOO without blocking the compiler
+/*
 				if (it.polito.verefoo.partitioning.GurobiClusterer.getStopAfterGurobi()) {
 					System.out.println("[Early Exit] Z3 Disabled. Return Gruobi values.");
 					this.sat = false;       // Fictitious value
 					this.result = root;     //  Prevents a crash if the test calls getResult()
 					return;
 				}
+*/
 
 				testResults = test.getTestTimeResults();
 				long beginAll = System.currentTimeMillis();
@@ -95,20 +97,31 @@ public class VerefooSerializer {
 				time =  (int) res.getTime(); 
 				
 				if (res.result != Status.UNSATISFIABLE && res.result != Status.UNKNOWN) {
-					// Execute Translator according to algorithm chosen
-					if(AlgoUsed.equals("AP")) 
-					 t = new Translator(res.model.toString(), root, g, test.getAllocationNodesAP(), test.getTrafficFlowsMapAP(), test.getNetworkAtomicPredicates());
-					else 
-					 t = new Translator(res.model.toString(), root, g, test.getAllocationNodesMF(), test.getTrafficFlowsMapMF());
-		
-					z3Model = res.model.toString();
-					t.setNormalizer(norm);
-					result = t.convert(AlgoUsed);
-					root = result;
-					sat = true; 
-					System.out.println("SAT\n");
-					testResults.setZ3Result("SAT");
-					
+					if (res.model == null) {
+						// The threads already translated the models, and the proxy already merged them.
+						// We just grab the finished product directly!
+
+						// NOTE: If your class uses 'this.nfv' instead of 'this.root', change the variable name here.
+						result = test.getMergedNFV();
+						root = result;
+						sat = true;
+						System.out.println("SAT\n");
+						testResults.setZ3Result("SAT");
+					} else {
+						// Execute Translator according to algorithm chosen
+						if (AlgoUsed.equals("AP"))
+							t = new Translator(res.model.toString(), root, g, test.getAllocationNodesAP(), test.getTrafficFlowsMapAP(), test.getNetworkAtomicPredicates());
+						else
+							t = new Translator(res.model.toString(), root, g, test.getAllocationNodesMF(), test.getTrafficFlowsMapMF());
+
+						z3Model = res.model.toString();
+						t.setNormalizer(norm);
+						result = t.convert(AlgoUsed);
+						root = result;
+						sat = true;
+						System.out.println("SAT\n");
+						testResults.setZ3Result("SAT");
+					}
 				} else {
 					System.out.println("UNSAT\n");
 					testResults.setZ3Result("UNSAT");
@@ -166,19 +179,19 @@ public class VerefooSerializer {
 				
 				if (res.result != Status.UNSATISFIABLE && res.result != Status.UNKNOWN) {
 					// Execute Translator according to algorithm chosen
-					if(AlgoUsed.equals("AP")) 
+					if(AlgoUsed.equals("AP"))
 					 t = new Translator(res.model.toString(), root, g, test.getAllocationNodesAP(), test.getTrafficFlowsMapAP(), test.getNetworkAtomicPredicates());
-					else 
+					else
 					 t = new Translator(res.model.toString(), root, g, test.getAllocationNodesMF(), test.getTrafficFlowsMapMF());
-		
+
 					z3Model = res.model.toString();
 					t.setNormalizer(norm);
 					result = t.convert(AlgoUsed);
 					root = result;
-					sat = true; 
+					sat = true;
 					System.out.println("SAT\n");
 					testResults.setZ3Result("SAT");
-					
+
 				} else {
 					System.out.println("UNSAT\n");
 					testResults.setZ3Result("UNSAT");

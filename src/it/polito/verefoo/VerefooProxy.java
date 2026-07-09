@@ -1,20 +1,17 @@
 package it.polito.verefoo;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
-import java.util.Collections;
+
 import com.microsoft.z3.Context;
+import com.microsoft.z3.Status;
 
 import it.polito.verefoo.allocation.AllocationManager;
 import it.polito.verefoo.allocation.AllocationNode;
@@ -35,19 +32,18 @@ import it.polito.verefoo.jaxb.NodeConstraints.NodeMetrics;
 import it.polito.verefoo.jaxb.Path.PathNode;
 import it.polito.verefoo.solver.*;
 import it.polito.verefoo.solver.Checker.Prop;
-import it.polito.verefoo.utils.APUtilsAP;
-import it.polito.verefoo.utils.APUtilsMF;
-import it.polito.verefoo.utils.GenerateFlowsTask;
-import it.polito.verefoo.utils.TestResults;
-import it.polito.verefoo.utils.VerificationResult;
+import it.polito.verefoo.utils.*;
 import it.polito.verefoo.functions.Forwarder;
 import it.polito.verefoo.functions.PacketFilterAP;
 import it.polito.verefoo.graph.MaximalFlow;
 import it.polito.verefoo.graph.Traffic;
 import it.polito.verefoo.partitioning.GurobiClusterer;
+import it.polito.verefoo.allocation.ClustersGenerator;
+import it.polito.verefoo.test.GurobiResult;
+import it.polito.verefoo.test.RunResultGurobi;
 
 /**
- * 
+ *
  * This is the main class that will interface with the Verefoo classes
  *
  */
@@ -55,6 +51,12 @@ public class VerefooProxy {
 	private Context ctx;
 	private NetContextAP nctxAP;
 	private NetContextMF nctxMF;
+	public boolean sat = true;
+	NFV mergedNFV;
+	public String optimality = "";
+	private Set<Integer> cutOffFlowIdsAP = new HashSet<>();
+	private Set<Integer> cutOffFlowIdsMF = new HashSet<>();
+
 	private List<Property> properties;
 	private List<Property> initialProperties;
 	private List<Property> toAddProperties,toKeptProperties;
@@ -76,7 +78,7 @@ public class VerefooProxy {
 	private HashMap<Integer, Predicate> networkAtomicPredicates = new HashMap<>();
 	HashMap<String, Node> transformersNode = new HashMap<>();
 	private TestResults testResults = new TestResults();
-	
+
 	/* Maximal flows */
 	HashMap<String, List<Predicate>> natD1map = new HashMap<>();
 	HashMap<String, Predicate> natD2map = new HashMap<>();
@@ -91,7 +93,7 @@ public class VerefooProxy {
 
 	/**
 	 * Public constructor for the Verefoo proxy service it executes according to the algorithm chosen
-	 * 
+	 *
 	 * @param graph              The graph that will be deployed on the network
 	 * @param hosts              The list of hosts in the network
 	 * @param conns              The connections between hosts
@@ -103,389 +105,568 @@ public class VerefooProxy {
 	 * @throws BadGraphError
 	 */
 	public VerefooProxy(Graph graph, Hosts hosts, Connections conns, Constraints constraints, List<Property> prop,
-			List<Path> paths,String algo) throws BadGraphError {
+	                    List<Path> paths,String algo, boolean useClustering) throws BadGraphError {
 
 		// Determine what algorithm to be executed
 		this.AlgoUsed = algo;
-		
+
 		if(AlgoUsed.equals("AP")){ // Atomic Predicate algo execution
-			
-		// Initialization of the variables related to the nodes
-		allocationNodesAP = new HashMap<>();
-		nodes = graph.getNode();
-		nodes.forEach(n -> allocationNodesAP.put(n.getName(), new AllocationNodeAP(n))); // class for AP
-		wildcardManager = new WildcardManager(allocationNodesAP);
-			
-		// Initialization of the variables related to the requirements
-		properties = prop;
-		securityRequirements = new HashMap<>();
-		int idRequirement = 0;
-		for(Property p : properties) {
-			securityRequirements.put(idRequirement, new SecurityRequirement(p, idRequirement));
-			idRequirement++;
-		}
-		
-		this.paths = paths;
-		this.nodeMetrics = constraints.getNodeConstraints().getNodeMetrics();
-		//Creation of the z3 context
-		HashMap<String, String> cfg = new HashMap<String, String>();
-		cfg.put("model", "true");
-		ctx = new Context(cfg);
-				
-		//Creation of the NetContext (z3 variables)
-		nctxAP = nctxGenerateAP(ctx, nodes, prop, allocationNodesAP);
-		nctxAP.setWildcardManager(wildcardManager);
-		aputilsAP = new APUtilsAP(); 
-		
-		/*
-		 * Main sequence of methods in VerefooProxy for Atomic Predicates:
-		 * 1) given every requirement, all the possible paths of the related flows are computed;
-		 * 2) then starting from requirements and transformers, all relative atomic predicates for the network are computed
-		 * 3) the transformation map for each transformer is filled (e.g. NAT1 input ap 5 -> output ap 8)
-		 * 4) then all atomic flows are computed 
-		 */
-		
-		allocationManager = new AllocationManager(ctx, nctxAP, allocationNodesAP, nodeMetrics, prop, wildcardManager);
-		allocationManager.instantiateFunctions("AP");
-		
-		/* Atomic predicates */
-		aputilsAP = new APUtilsAP();
-		long t1 = System.currentTimeMillis();
-		trafficFlowsMapAP = generateFlowPathsAP();
-		networkAtomicPredicates = generateAtomicPredicateNew();
-		long t2 = System.currentTimeMillis();
-		testResults.setAtomicPredCompTime(t2-t1);
-		fillTransformationMap();
-		//printTransformations(); //DEBUG
-		computeAtomicFlows();
-		t1 = System.currentTimeMillis();
-		testResults.setAtomicFlowsCompTime(t1-t2);
-		testResults.setBeginMaxSMTTime(t1);
-		//distributeTrafficFlows();
 
-		// Start Gurobi Integration (AP)
-		System.out.println(">>> Generating Edges and Loads for Gurobi (Min-Cut)...");
+			// Initialization of the variables related to the nodes
+			allocationNodesAP = new HashMap<>();
+			nodes = graph.getNode();
+			nodes.forEach(n -> allocationNodesAP.put(n.getName(), new AllocationNodeAP(n))); // class for AP
+			wildcardManager = new WildcardManager(allocationNodesAP);
 
-		Map<String, GurobiClusterer.ClusterEdge> edgeMap = new HashMap<>();
-		Map<Node, Integer> nodeLoads = new HashMap<>();
+			// Initialization of the variables related to the requirements
+			properties = prop;
+			securityRequirements = new HashMap<>();
+			int idRequirement = 0;
+			for(Property p : properties) {
+				securityRequirements.put(idRequirement, new SecurityRequirement(p, idRequirement));
+				idRequirement++;
+			}
 
-		// Initialize the loads of all nodes to 0
-		for(Node n : nodes) {
-			nodeLoads.put(n, 0);
-		}
+			this.paths = paths;
+			this.nodeMetrics = constraints.getNodeConstraints().getNodeMetrics();
+			//Creation of the z3 context
+			HashMap<String, String> cfg = new HashMap<String, String>();
+			cfg.put("model", "true");
+			ctx = new Context(cfg);
 
-		for (FlowPathAP fp : trafficFlowsMapAP.values()) {
-			List<AllocationNodeAP> path = fp.getPath();
+			//Creation of the NetContext (z3 variables)
+			nctxAP = nctxGenerateAP(ctx, nodes, prop, allocationNodesAP);
+			nctxAP.setWildcardManager(wildcardManager);
+			aputilsAP = new APUtilsAP();
 
-			// If the path has only 1 node (impossible in real networks, but just to be safe)
-			if (path.size() <= 1) continue;
+			/*
+			 * Main sequence of methods in VerefooProxy for Atomic Predicates:
+			 * 1) given every requirement, all the possible paths of the related flows are computed;
+			 * 2) then starting from requirements and transformers, all relative atomic predicates for the network are computed
+			 * 3) the transformation map for each transformer is filled (e.g. NAT1 input ap 5 -> output ap 8)
+			 * 4) then all atomic flows are computed
+			 */
 
-			Property p = fp.getRequirement().getOriginalProperty();
-			double lambda = GurobiClusterer.getLambdaOptimization();/*(p.getName() == PName.ISOLATION_PROPERTY)
+			allocationManager = new AllocationManager(ctx, nctxAP, allocationNodesAP, nodeMetrics, prop, wildcardManager);
+			allocationManager.instantiateFunctions("AP");
+
+			/* Atomic predicates */
+			aputilsAP = new APUtilsAP();
+			long t1 = System.currentTimeMillis();
+			trafficFlowsMapAP = generateFlowPathsAP();
+			networkAtomicPredicates = generateAtomicPredicateNew();
+			long t2 = System.currentTimeMillis();
+			testResults.setAtomicPredCompTime(t2-t1);
+			fillTransformationMap();
+			//printTransformations(); //DEBUG
+			computeAtomicFlows();
+			t1 = System.currentTimeMillis();
+			testResults.setAtomicFlowsCompTime(t1-t2);
+			testResults.setBeginMaxSMTTime(t1);
+			//distributeTrafficFlows();
+
+			// Start Gurobi Integration (AP)
+			if(useClustering) {
+				System.out.println(">>> Generating Edges and Loads for Gurobi (Min-Cut)...");
+
+				Map<String, GurobiClusterer.ClusterEdge> edgeMap = new HashMap<>();
+				Map<Node, Integer> nodeLoads = new HashMap<>();
+
+				// Initialize the loads of all nodes to 0
+				for (Node n : nodes) {
+					nodeLoads.put(n, 0);
+				}
+
+				for (FlowPathAP fp : trafficFlowsMapAP.values()) {
+					List<AllocationNodeAP> path = fp.getPath();
+
+					// If the path has only 1 node (impossible in real networks, but just to be safe)
+					if (path.size() <= 1) continue;
+
+					Property p = fp.getRequirement().getOriginalProperty();
+					double lambda = GurobiClusterer.getLambdaOptimization();/*(p.getName() == PName.ISOLATION_PROPERTY)
 					? GurobiClusterer.getLambdaIsolation()
 					: GurobiClusterer.getLambdaReachability();*/
 
-			// Node load calculation (We start from i=1 to exclude the source/client node)
-			for (int i = 1; i < path.size(); i++) {
-				Node n = path.get(i).getNode();
-				nodeLoads.put(n, nodeLoads.get(n) + 1);
+					// Node load calculation (We start from i=1 to exclude the source/client node)
+					for (int i = 1; i < path.size(); i++) {
+						Node n = path.get(i).getNode();
+						nodeLoads.put(n, nodeLoads.get(n) + 1);
+					}
+
+					// Edge Creation and Weight Aggregation
+					for (int i = 1; i < path.size() - 1; i++) {
+						Node u = path.get(i).getNode();
+						Node v = path.get(i + 1).getNode();
+
+						// Canonicalize the key to consider the Undirected edge (A-B is the same as B-A)
+						String uName = u.getName();
+						String vName = v.getName();
+						String edgeKey = (uName.compareTo(vName) < 0) ? uName + "-" + vName : vName + "-" + uName;
+
+						// Retrieve the existing edge or create it
+						GurobiClusterer.ClusterEdge edge = edgeMap.computeIfAbsent(edgeKey, k -> new GurobiClusterer.ClusterEdge(u, v));
+
+						// Add the penalty to the physical "cable"
+						edge.weight += lambda;
+					}
+				}
+
+				List<GurobiClusterer.ClusterEdge> edgesList = new ArrayList<>(edgeMap.values());
+
+				GurobiClusterer clustererAP = new GurobiClusterer(nodes, edgesList, nodeLoads);
+				try {
+					clustererAP.solve_ILP();
+				} catch (Exception e) {
+					System.err.println("Error during ILP Clustering execution:");
+					e.printStackTrace();
+				}
+				// End Gurobi Integration (AP)
+
+				Map<Node, Integer> gurobiAssignment = GurobiClusterer.getLastClusterAssignment();
+
+				// Give every AllocationNodeAP a synthetic id -- ClustersGenerator's external-assignment
+				// constructor only needs the key set (to look nodes up by IP); the Integer values here
+				// are never read on this path.
+				Map<AllocationNodeAP, Integer> mapNodeToIdAP = new HashMap<>();
+				int syntheticId = 0;
+				for (AllocationNodeAP n : allocationNodesAP.values()) {
+					mapNodeToIdAP.put(n, syntheticId++);
+				}
+				int MAX_RETRIES = 3;
+				for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
+					this.sat = true; // Reset SAT for this attempt
+
+					if (attempt > 0) {
+						System.out.println("\n>>> Attempt " + attempt + " failed (UNSAT). Retrying with shifted cutoff assignments...");
+					}
+
+					ClustersGenerator clustersGenerator = new ClustersGenerator(mapNodeToIdAP, trafficFlowsMapAP,
+							new HashSet<>(nodes), securityRequirements, networkAtomicPredicates, gurobiAssignment, attempt);
+
+					Map<Integer, Set<AllocationNodeAP>> subnetworks = clustersGenerator.getSubNetworksAP();
+					Map<Integer, Set<FlowPathAP>> flowsPerSubnetwork = clustersGenerator.getFlowsPerSubnetworkAP();
+					Map<Integer, Set<SecurityRequirement>> reqsPerSubnetwork = clustersGenerator.getReqsPerSubnetworkAP();
+					Map<Integer, Set<Property>> propsPerSubnetwork = clustersGenerator.getPropsPerSubnetwork();
+					Set<FlowPathAP> cutoffFlows = clustersGenerator.getCutoffFlowsAP();
+
+					this.cutOffFlowIdsAP = cutoffFlows.stream().map(FlowPathAP::getIdFlow).collect(Collectors.toSet());
+
+					System.out.println(">>> Running VEREFOO on " + subnetworks.size() + " Gurobi subnetworks (Attempt " + (attempt + 1) + "/" + MAX_RETRIES + ")...");
+
+					RunResultGurobi globalData = new RunResultGurobi();
+					globalData.algorithm = "Gurobi";
+					globalData.lambdaOptimization = GurobiClusterer.getLambdaOptimization();
+					globalData.lambdaPerformance = GurobiClusterer.getLambdaPerformance();
+					globalData.numNodes = nodes.size();
+					globalData.numFlows = trafficFlowsMapAP.size();
+					globalData.numNSRs = securityRequirements.size();
+
+					ExecutorService subnetworkExecutor = Executors.newFixedThreadPool(
+							Math.max(1, Runtime.getRuntime().availableProcessors()));
+					List<Future<GurobiResult>> futures = new ArrayList<>();
+
+					for (Map.Entry<Integer, Set<AllocationNodeAP>> entry : subnetworks.entrySet()) {
+						int clusterId = entry.getKey();
+						Set<AllocationNodeAP> clusterNodes = entry.getValue();
+						Set<Property> clusterProps = propsPerSubnetwork.getOrDefault(clusterId, new HashSet<>());
+						Set<FlowPathAP> clusterFlows = flowsPerSubnetwork.getOrDefault(clusterId, new HashSet<>());
+						Set<SecurityRequirement> clusterReqs = reqsPerSubnetwork.getOrDefault(clusterId, new HashSet<>());
+
+						AllocateSubnetworkTask task = new AllocateSubnetworkTask(clusterNodes, clusterProps, nodeMetrics,
+								clusterFlows, clusterReqs, networkAtomicPredicates, clusterId, "AP", globalData);
+						futures.add(subnetworkExecutor.submit(task));
+					}
+
+					List<GurobiResult> GurobiResults = new ArrayList<>();
+					List<NFV> nfvResults = new ArrayList<>();
+
+					for (Future<GurobiResult> f : futures) {
+						try {
+							GurobiResult r = f.get();
+							if (r == null || r.getNFV() == null) {
+								this.sat = false;
+							} else {
+								GurobiResults.add(r);
+								nfvResults.add(r.getNFV());
+							}
+						} catch (InterruptedException | ExecutionException e) {
+							e.printStackTrace();
+						}
+					}
+					subnetworkExecutor.shutdown();
+
+					// If SAT is true, the attempt succeeded! Merge and break the loop.
+					if (this.sat && !nfvResults.isEmpty()) {
+						NFV finalResult = mergeResults(nfvResults, "AP");
+						optimizeDuplicateFirewalls(finalResult, "AP");
+						mergedNFV = finalResult;
+
+						try {
+							addOtherNodes(finalResult, new HashSet<>(nodes));
+							computeOptimality(finalResult);
+						} catch (Exception e) {
+							e.printStackTrace();
+						}
+
+						break; // <--- BREAK THE LOOP, WE ARE DONE!
+					}
+
+				}
+			} else {
+				allocateFunctionsAP();
+				// Change Execution depending on chosen algorithm
+				allocationManager.configureFunctionsAP(); // atomic predicate method
+
+				check = new Checker(ctx, nctxAP, allocationNodesAP);
+				formalizeRequirementsAP();
 			}
-
-			// Edge Creation and Weight Aggregation
-			for (int i = 1; i < path.size() - 1; i++) {
-				Node u = path.get(i).getNode();
-				Node v = path.get(i+1).getNode();
-
-				// Canonicalize the key to consider the Undirected edge (A-B is the same as B-A)
-				String uName = u.getName();
-				String vName = v.getName();
-				String edgeKey = (uName.compareTo(vName) < 0) ? uName + "-" + vName : vName + "-" + uName;
-
-				// Retrieve the existing edge or create it
-				GurobiClusterer.ClusterEdge edge = edgeMap.computeIfAbsent(edgeKey, k -> new GurobiClusterer.ClusterEdge(u, v));
-
-				// Add the penalty to the physical "cable"
-				edge.weight += lambda;
-			}
-		}
-
-		List<GurobiClusterer.ClusterEdge> edgesList = new ArrayList<>(edgeMap.values());
-
-		GurobiClusterer clustererAP = new GurobiClusterer(nodes, edgesList, nodeLoads);
-		try {
-			clustererAP.solve_ILP();
-		} catch (Exception e) {
-			System.err.println("Error during ILP Clustering execution:");
-			e.printStackTrace();
-		}
-		// End Gurobi Integration (AP)
-
-		allocateFunctionsAP();
-		// Change Execution depending on chosen algorithm
-		allocationManager.configureFunctionsAP(); // atomic predicate method
-		
-		check = new Checker(ctx, nctxAP, allocationNodesAP);
-		formalizeRequirementsAP();
-
 		}
 
 		if(AlgoUsed.equals("MF")){ // Maximal flows algorithm execution
-			
-		// Initialization of the variables related to the nodes
-		allocationNodesMF = new HashMap<>();
-		nodes = graph.getNode();
-		nodes.forEach(n -> allocationNodesMF.put(n.getName(), new AllocationNodeMF(n))); // class for MF
-		wildcardManager = new WildcardManager(allocationNodesMF,"MF"); // constructor for MF
-			
-		
-		// Initialization of the variables related to the requirements
-		properties = prop;
-		securityRequirements = new HashMap<>();
-		int idRequirement = 0;
-		for(Property p : properties) {
-			securityRequirements.put(idRequirement, new SecurityRequirement(p, idRequirement));
-			idRequirement++;
-		}
-		
-		this.paths = paths;
-		this.nodeMetrics = constraints.getNodeConstraints().getNodeMetrics();
-		//Creation of the z3 context
-		HashMap<String, String> cfg = new HashMap<String, String>();
-		cfg.put("model", "true");
-		ctx = new Context(cfg);
-				
-		//Creation of the NetContext (z3 variables)
-		nctxMF = nctxGenerateMF(ctx, nodes, prop, allocationNodesMF);
-		nctxMF.setWildcardManager(wildcardManager);
-		aputilsMF = new APUtilsMF();  // for Maximal Flows
-		
-		/*
-		 * Main sequence of methods in VerefooProxy for Maximal Flows:
-		 * 1) given every requirement, all the possible paths of the related flows are computed;
-		 * 2) the existing functions are instantiated
-		 * 3) the functions to be allocated are associated to Allocation Places
-		 * 4) the possible traffic in input to each node is computed
-		 * 5) soft and hard constraints are defined for each function
-		 * 6) the hard constraints for the requirements are defined
-		 */
-		
-		 long beginComputingFlows = System.currentTimeMillis();
-		 System.out.println("Generating flow paths ...");
-		 trafficFlowsMapMF = generateFlowPathsMF();
-		 allocationManager = new AllocationManager(ctx, nctxMF, allocationNodesMF, nodeMetrics, prop, wildcardManager);
-		 allocationManager.instantiateFunctions("MF");
-		 allocateFunctionsMF();
-		 System.out.print("Filling trasformers map ...");
-		 fillTrasformersMap();
-		 System.out.println("Generating maximal flows ...");
-		 generateMaximalFlows();
-		 long endComputingFlows = System.currentTimeMillis();
-		 testResults.setMaximalFlowsCompTime(endComputingFlows- beginComputingFlows);
-		 testResults.setStartMaxSMTtime(System.currentTimeMillis());
-		 allocationManager.configureFunctionsMF(); // MF method
-		 check = new Checker(ctx, nctxMF, allocationNodesMF);
 
-		// Start Gurobi Integration (MF - MIN CUT)
-		System.out.println(">>> Generating Edges and Loads for Gurobi (Min-Cut)...");
+			// Initialization of the variables related to the nodes
+			allocationNodesMF = new HashMap<>();
+			nodes = graph.getNode();
+			nodes.forEach(n -> allocationNodesMF.put(n.getName(), new AllocationNodeMF(n))); // class for MF
+			wildcardManager = new WildcardManager(allocationNodesMF,"MF"); // constructor for MF
 
-		Map<String, GurobiClusterer.ClusterEdge> edgeMap = new HashMap<>();
-		Map<Node, Integer> nodeLoads = new HashMap<>();
 
-		// Initialize the loads of all nodes to 0
-		for(Node n : nodes) {
-			nodeLoads.put(n, 0);
-		}
+			// Initialization of the variables related to the requirements
+			properties = prop;
+			securityRequirements = new HashMap<>();
+			int idRequirement = 0;
+			for(Property p : properties) {
+				securityRequirements.put(idRequirement, new SecurityRequirement(p, idRequirement));
+				idRequirement++;
+			}
 
-		for (FlowPathMF fp : trafficFlowsMapMF.values()) {
-			List<AllocationNodeMF> path = fp.getPath();
+			this.paths = paths;
+			this.nodeMetrics = constraints.getNodeConstraints().getNodeMetrics();
+			//Creation of the z3 context
+			HashMap<String, String> cfg = new HashMap<String, String>();
+			cfg.put("model", "true");
+			ctx = new Context(cfg);
 
-			// If the path has only 1 node (impossible in real networks, but just to be safe)
-			if (path.size() <= 1) continue;
+			//Creation of the NetContext (z3 variables)
+			nctxMF = nctxGenerateMF(ctx, nodes, prop, allocationNodesMF);
+			nctxMF.setWildcardManager(wildcardManager);
+			aputilsMF = new APUtilsMF();  // for Maximal Flows
 
-			Property p = fp.getRequirement().getOriginalProperty();
-			double lambda = GurobiClusterer.getLambdaOptimization();/*(p.getName() == PName.ISOLATION_PROPERTY)
+			/*
+			 * Main sequence of methods in VerefooProxy for Maximal Flows:
+			 * 1) given every requirement, all the possible paths of the related flows are computed;
+			 * 2) the existing functions are instantiated
+			 * 3) the functions to be allocated are associated to Allocation Places
+			 * 4) the possible traffic in input to each node is computed
+			 * 5) soft and hard constraints are defined for each function
+			 * 6) the hard constraints for the requirements are defined
+			 */
+
+			long beginComputingFlows = System.currentTimeMillis();
+			System.out.println("Generating flow paths ...");
+			trafficFlowsMapMF = generateFlowPathsMF();
+			allocationManager = new AllocationManager(ctx, nctxMF, allocationNodesMF, nodeMetrics, prop, wildcardManager);
+			allocationManager.instantiateFunctions("MF");
+			allocateFunctionsMF();
+			System.out.print("Filling trasformers map ...");
+			fillTrasformersMap();
+			System.out.println("Generating maximal flows ...");
+			generateMaximalFlows();
+			long endComputingFlows = System.currentTimeMillis();
+			testResults.setMaximalFlowsCompTime(endComputingFlows- beginComputingFlows);
+			testResults.setStartMaxSMTtime(System.currentTimeMillis());
+
+			// Start Gurobi Integration (MF - MIN CUT)
+			if(useClustering) {
+				System.out.println(">>> Generating Edges and Loads for Gurobi (Min-Cut)...");
+
+				Map<String, GurobiClusterer.ClusterEdge> edgeMap = new HashMap<>();
+				Map<Node, Integer> nodeLoads = new HashMap<>();
+
+				// Initialize the loads of all nodes to 0
+				for (Node n : nodes) {
+					nodeLoads.put(n, 0);
+				}
+
+				for (FlowPathMF fp : trafficFlowsMapMF.values()) {
+					List<AllocationNodeMF> path = fp.getPath();
+
+					// If the path has only 1 node (impossible in real networks, but just to be safe)
+					if (path.size() <= 1) continue;
+
+					Property p = fp.getRequirement().getOriginalProperty();
+					double lambda = GurobiClusterer.getLambdaOptimization();/*(p.getName() == PName.ISOLATION_PROPERTY)
 					? GurobiClusterer.getLambdaIsolation()
 					: GurobiClusterer.getLambdaReachability();*/
 
-			// Node Load Calculation (We start from i=1 to exclude the source/client node)
-			for (int i = 1; i < path.size(); i++) {
-				Node n = path.get(i).getNode();
-				nodeLoads.put(n, nodeLoads.get(n) + 1);
+					// Node Load Calculation (We start from i=1 to exclude the source/client node)
+					for (int i = 1; i < path.size(); i++) {
+						Node n = path.get(i).getNode();
+						nodeLoads.put(n, nodeLoads.get(n) + 1);
+					}
+
+					// Edge Creation and Weight Aggregation
+					for (int i = 1; i < path.size() - 1; i++) {
+						Node u = path.get(i).getNode();
+						Node v = path.get(i + 1).getNode();
+
+						// Canonicalize the key to consider the Undirected edge (A-B is the same as B-A)
+						String uName = u.getName();
+						String vName = v.getName();
+						String edgeKey = (uName.compareTo(vName) < 0) ? uName + "-" + vName : vName + "-" + uName;
+
+						// Retrieve the existing edge or create it
+						GurobiClusterer.ClusterEdge edge = edgeMap.computeIfAbsent(edgeKey, k -> new GurobiClusterer.ClusterEdge(u, v));
+
+						// Add the penalty to the physical "cable"
+						edge.weight += lambda;
+					}
+				}
+
+				List<GurobiClusterer.ClusterEdge> edgesList = new ArrayList<>(edgeMap.values());
+
+				GurobiClusterer clustererMF = new GurobiClusterer(nodes, edgesList, nodeLoads);
+				try {
+					clustererMF.solve_ILP();
+				} catch (Exception e) {
+					System.err.println("Error during ILP Clustering execution:");
+					e.printStackTrace();
+				}
+				// End Gurobi Integration (MF)
+
+				Map<Node, Integer> gurobiAssignmentMF = GurobiClusterer.getLastClusterAssignment();
+
+				// Same synthetic id trick as the AP branch -- only the key set (IP lookup) matters here.
+				Map<AllocationNodeMF, Integer> mapNodeToIdMF = new HashMap<>();
+				int syntheticIdMF = 0;
+				for (AllocationNodeMF n : allocationNodesMF.values()) {
+					mapNodeToIdMF.put(n, syntheticIdMF++);
+				}
+				int MAX_RETRIES = 3;
+				for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
+					this.sat = true; // Reset SAT for this attempt
+
+					if (attempt > 0) {
+						System.out.println("\n>>> Attempt " + attempt + " failed (UNSAT). Retrying with shifted cutoff assignments...");
+					}
+
+					ClustersGenerator clustersGeneratorMF = new ClustersGenerator(mapNodeToIdMF, trafficFlowsMapMF,
+							new HashSet<>(nodes), securityRequirements, gurobiAssignmentMF, attempt); // <-- Pass attempt
+
+					Map<Integer, Set<AllocationNodeMF>> subnetworksMF = clustersGeneratorMF.getSubNetworksMF();
+					Map<Integer, Set<FlowPathMF>> flowsPerSubnetworkMF = clustersGeneratorMF.getFlowsPerSubnetworkMF();
+					Map<Integer, Set<SecurityRequirement>> reqsPerSubnetworkMF = clustersGeneratorMF.getReqsPerSubnetworkMF();
+					Map<Integer, Set<Property>> propsPerSubnetworkMF = clustersGeneratorMF.getPropsPerSubnetwork();
+					Set<FlowPathMF> cutoffFlowsMF = clustersGeneratorMF.getCutoffFlowsMF();
+					this.cutOffFlowIdsMF = cutoffFlowsMF.stream().map(FlowPathMF::getIdFlow).collect(Collectors.toSet());
+
+					System.out.println(">>> Running VEREFOO on " + subnetworksMF.size() + " Gurobi subnetworks (Attempt " + (attempt + 1) + "/" + MAX_RETRIES + ")...");
+
+					RunResultGurobi globalDataMF = new RunResultGurobi();
+					globalDataMF.algorithm = "Gurobi";
+					globalDataMF.lambdaOptimization = GurobiClusterer.getLambdaOptimization();
+					globalDataMF.lambdaPerformance = GurobiClusterer.getLambdaPerformance();
+					globalDataMF.numNodes = nodes.size();
+					globalDataMF.numFlows = trafficFlowsMapMF.size();
+					globalDataMF.numNSRs = securityRequirements.size();
+
+					ExecutorService subnetworkExecutorMF = Executors.newFixedThreadPool(
+							Math.max(1, Runtime.getRuntime().availableProcessors()));
+					List<Future<GurobiResult>> futuresMF = new ArrayList<>();
+
+					for (Map.Entry<Integer, Set<AllocationNodeMF>> entry : subnetworksMF.entrySet()) {
+						int clusterId = entry.getKey();
+						Set<AllocationNodeMF> clusterNodes = entry.getValue();
+						Set<Property> clusterProps = propsPerSubnetworkMF.getOrDefault(clusterId, new HashSet<>());
+						Set<FlowPathMF> clusterFlows = flowsPerSubnetworkMF.getOrDefault(clusterId, new HashSet<>());
+						Set<SecurityRequirement> clusterReqs = reqsPerSubnetworkMF.getOrDefault(clusterId, new HashSet<>());
+
+						AllocateSubnetworkTask task = new AllocateSubnetworkTask(clusterNodes, clusterProps, nodeMetrics,
+								clusterFlows, clusterReqs, clusterId, "MF", globalDataMF);
+						futuresMF.add(subnetworkExecutorMF.submit(task));
+					}
+
+					List<GurobiResult> GurobiResultsMF = new ArrayList<>();
+					List<NFV> nfvResults = new ArrayList<>();
+
+					for (Future<GurobiResult> f : futuresMF) {
+						try {
+							GurobiResult r = f.get();
+							if (r == null || r.getNFV() == null) {
+								this.sat = false;
+							} else {
+								GurobiResultsMF.add(r);
+								nfvResults.add(r.getNFV());
+							}
+						} catch (InterruptedException | ExecutionException e) {
+							e.printStackTrace();
+						}
+					}
+					subnetworkExecutorMF.shutdown();
+
+					// If SAT is true, the attempt succeeded! Merge and break the loop.
+					if (this.sat && !nfvResults.isEmpty()) {
+						NFV finalResult = mergeResults(nfvResults, "MF");
+						optimizeDuplicateFirewalls(finalResult, "MF");
+						mergedNFV = finalResult;
+
+						try {
+							addOtherNodes(finalResult, new HashSet<>(nodes));
+							computeOptimality(finalResult);
+						} catch (Exception e) {
+							e.printStackTrace();
+						}
+
+						break; // <--- BREAK THE LOOP, WE ARE DONE!
+					}
+				}
+			} else {
+				allocationManager.configureFunctionsMF(); // MF method
+				check = new Checker(ctx, nctxMF, allocationNodesMF);
+				formalizeRequirementsMF();
 			}
-
-			// Edge Creation and Weight Aggregation
-			for (int i = 1; i < path.size() - 1; i++) {
-				Node u = path.get(i).getNode();
-				Node v = path.get(i+1).getNode();
-
-				// Canonicalize the key to consider the Undirected edge (A-B is the same as B-A)
-				String uName = u.getName();
-				String vName = v.getName();
-				String edgeKey = (uName.compareTo(vName) < 0) ? uName + "-" + vName : vName + "-" + uName;
-
-				// Retrieve the existing edge or create it
-				GurobiClusterer.ClusterEdge edge = edgeMap.computeIfAbsent(edgeKey, k -> new GurobiClusterer.ClusterEdge(u, v));
-
-				// Add the penalty to the physical "cable"
-				edge.weight += lambda;
-			}
 		}
-
-		List<GurobiClusterer.ClusterEdge> edgesList = new ArrayList<>(edgeMap.values());
-
-		GurobiClusterer clustererMF = new GurobiClusterer(nodes, edgesList, nodeLoads);
-		try {
-			clustererMF.solve_ILP();
-		} catch (Exception e) {
-			System.err.println("Error during ILP Clustering execution:");
-			e.printStackTrace();
-		}
-		// End Gurobi Integration (MF)
-
-		formalizeRequirementsMF();
-	
-		}
-
 	}
-	
+
 	/**
 	 * Alternative version for REACT-VEREFOO
-     *
-     */
-	public VerefooProxy(Graph graph, Hosts hosts, Connections conns, Constraints constraints, List<Property> initialProp, 
-			List<Property> targetProp, List<Path> paths,String algo) throws BadGraphError {
+	 *
+	 */
+	public VerefooProxy(Graph graph, Hosts hosts, Connections conns, Constraints constraints, List<Property> initialProp,
+	                    List<Property> targetProp, List<Path> paths,String algo) throws BadGraphError {
 
 		// Determine what algorithm to be executed
 		this.AlgoUsed = algo;
-		
-		if(AlgoUsed.equals("AP")){ // Atomic Predicate algo execution
-			
-		// Initialization of the variables related to the nodes
-		allocationNodesAP = new HashMap<>();
-		nodes = graph.getNode();
-		nodes.forEach(n -> allocationNodesAP.put(n.getName(), new AllocationNodeAP(n))); // class for AP
-		wildcardManager = new WildcardManager(allocationNodesAP);
-			
-		// Initialization of the variables related to the requirements
-		properties = targetProp;
-		initialProperties = initialProp;
-		toAddProperties = new ArrayList<>(targetProp);
-		
-		securityRequirements = new HashMap<>();
-		int idRequirement = 0;
-		//Create map for requirements
-		if(initialProperties != null) {
 
-			//Compute intersection between initialProp and targetProp, then remove it from "targetProp" to find out "toAddProperties"
-			toKeptProperties = computeKeptList(initialProperties, properties);
-			toKeptProperties.forEach(e -> {
-				for(Property p: toAddProperties) {
-					if(propertyCompare(p,e)) {
-						toAddProperties.remove(p);
-						break;
+		if(AlgoUsed.equals("AP")){ // Atomic Predicate algo execution
+
+			// Initialization of the variables related to the nodes
+			allocationNodesAP = new HashMap<>();
+			nodes = graph.getNode();
+			nodes.forEach(n -> allocationNodesAP.put(n.getName(), new AllocationNodeAP(n))); // class for AP
+			wildcardManager = new WildcardManager(allocationNodesAP);
+
+			// Initialization of the variables related to the requirements
+			properties = targetProp;
+			initialProperties = initialProp;
+			toAddProperties = new ArrayList<>(targetProp);
+
+			securityRequirements = new HashMap<>();
+			int idRequirement = 0;
+			//Create map for requirements
+			if(initialProperties != null) {
+
+				//Compute intersection between initialProp and targetProp, then remove it from "targetProp" to find out "toAddProperties"
+				toKeptProperties = computeKeptList(initialProperties, properties);
+				toKeptProperties.forEach(e -> {
+					for(Property p: toAddProperties) {
+						if(propertyCompare(p,e)) {
+							toAddProperties.remove(p);
+							break;
+						}
 					}
+				});
+
+				//Create a map about the updated security requirements
+				toAddSecurityRequirements = new HashMap<>();
+				for(Property p : toAddProperties) {
+					toAddSecurityRequirements.put(idRequirement, new SecurityRequirement(p,idRequirement));
+					idRequirement++;
 				}
-			});
-			
-			//Create a map about the updated security requirements
-			toAddSecurityRequirements = new HashMap<>();
-			for(Property p : toAddProperties) {
-				toAddSecurityRequirements.put(idRequirement, new SecurityRequirement(p,idRequirement));
-				idRequirement++;
+
+				//Fill the map with target set of security requirements
+				securityRequirements.putAll(toAddSecurityRequirements);
+				for(Property p: toKeptProperties) {
+					securityRequirements.put(idRequirement, new SecurityRequirement(p,idRequirement));
+					idRequirement++;
+				}
+			} else {
+				//Create a map about the updated security requirements
+				toAddSecurityRequirements = new HashMap<>();
+				for(Property p : toAddProperties) {
+					toAddSecurityRequirements.put(idRequirement, new SecurityRequirement(p,idRequirement));
+					idRequirement++;
+				}
+
+				//Fill the map with target set of security requirements
+				securityRequirements.putAll(toAddSecurityRequirements);
 			}
-			
-			//Fill the map with target set of security requirements
-			securityRequirements.putAll(toAddSecurityRequirements);
-			for(Property p: toKeptProperties) {
-				securityRequirements.put(idRequirement, new SecurityRequirement(p,idRequirement));
-				idRequirement++;
-			}
-		} else {
-			//Create a map about the updated security requirements
-			toAddSecurityRequirements = new HashMap<>();
-			for(Property p : toAddProperties) {
-				toAddSecurityRequirements.put(idRequirement, new SecurityRequirement(p,idRequirement));
-				idRequirement++;
-			}
-			
-			//Fill the map with target set of security requirements
-			securityRequirements.putAll(toAddSecurityRequirements);
-		}	
-		
-		this.paths = paths;
-		this.nodeMetrics = constraints.getNodeConstraints().getNodeMetrics();
-		//Creation of the z3 context
-		HashMap<String, String> cfg = new HashMap<String, String>();
-		cfg.put("model", "true");
-		ctx = new Context(cfg);
-				
-		//Creation of the NetContext (z3 variables)
-		nctxAP = nctxGenerateAP(ctx, nodes, targetProp, allocationNodesAP);
-		nctxAP.setWildcardManager(wildcardManager);
-		aputilsAP = new APUtilsAP(); 
-		
-		
-		/*
-		 * Main sequence of methods in VerefooProxy for Atomic Predicates:
-		 * 1) given every requirement, all the possible paths of the related flows are computed;
-		 * 2) then starting from requirements and transformers, all relative atomic predicates for the network are computed
-		 * 3) the transformation map for each transformer is filled (e.g. NAT1 input ap 5 -> output ap 8)
-		 * 4) then all atomic flows are computed 
-		 * 5) using atomic flows, network's components that must be reconfigured are detected
-		 */
-		
-		allocationManager = new AllocationManager(ctx, nctxAP, allocationNodesAP, nodeMetrics, targetProp, wildcardManager);
-		allocationManager.instantiateFunctions("AP");
-		
-		/* Atomic predicates */
-		aputilsAP = new APUtilsAP();
-		long t1 = System.currentTimeMillis();
-		trafficFlowsMapAP = generateFlowPathsAP();
-		networkAtomicPredicates = generateAtomicPredicateNew();
-		long t2 = System.currentTimeMillis();
-		testResults.setAtomicPredCompTime(t2-t1);
-		fillTransformationMap();
-		//printTransformations(); //DEBUG
-		computeAtomicFlows();
-		t1 = System.currentTimeMillis();
-		testResults.setAtomicFlowsCompTime(t1-t2);
-		
-		/* REACT Algorithm */
-		List<AllocationNodeAP> nodesToBeReconfigured = computeReconfiguredNetwork();
-		for(AllocationNodeAP n: nodesToBeReconfigured) {
-			if(n.getTypeNF().value().equals("FIREWALL")) {
-				PacketFilterAP fw = (PacketFilterAP) n.getPlacedNF();
-				fw.reConfigure();
+
+			this.paths = paths;
+			this.nodeMetrics = constraints.getNodeConstraints().getNodeMetrics();
+			//Creation of the z3 context
+			HashMap<String, String> cfg = new HashMap<String, String>();
+			cfg.put("model", "true");
+			ctx = new Context(cfg);
+
+			//Creation of the NetContext (z3 variables)
+			nctxAP = nctxGenerateAP(ctx, nodes, targetProp, allocationNodesAP);
+			nctxAP.setWildcardManager(wildcardManager);
+			aputilsAP = new APUtilsAP();
+
+
+			/*
+			 * Main sequence of methods in VerefooProxy for Atomic Predicates:
+			 * 1) given every requirement, all the possible paths of the related flows are computed;
+			 * 2) then starting from requirements and transformers, all relative atomic predicates for the network are computed
+			 * 3) the transformation map for each transformer is filled (e.g. NAT1 input ap 5 -> output ap 8)
+			 * 4) then all atomic flows are computed
+			 * 5) using atomic flows, network's components that must be reconfigured are detected
+			 */
+
+			allocationManager = new AllocationManager(ctx, nctxAP, allocationNodesAP, nodeMetrics, targetProp, wildcardManager);
+			allocationManager.instantiateFunctions("AP");
+
+			/* Atomic predicates */
+			aputilsAP = new APUtilsAP();
+			long t1 = System.currentTimeMillis();
+			trafficFlowsMapAP = generateFlowPathsAP();
+			networkAtomicPredicates = generateAtomicPredicateNew();
+			long t2 = System.currentTimeMillis();
+			testResults.setAtomicPredCompTime(t2-t1);
+			fillTransformationMap();
+			//printTransformations(); //DEBUG
+			computeAtomicFlows();
+			t1 = System.currentTimeMillis();
+			testResults.setAtomicFlowsCompTime(t1-t2);
+
+			/* REACT Algorithm */
+			List<AllocationNodeAP> nodesToBeReconfigured = computeReconfiguredNetwork();
+			for(AllocationNodeAP n: nodesToBeReconfigured) {
+				if(n.getTypeNF().value().equals("FIREWALL")) {
+					PacketFilterAP fw = (PacketFilterAP) n.getPlacedNF();
+					fw.reConfigure();
 //				n.setTypeNF(null);
 //				n.setPlacedNF(null);
-				n.getNode().setFunctionalType(null);
-				n.getNode().setConfiguration(null);
-			} else if(n.getTypeNF().value().equals("FORWARDER")) {
-				n.setTypeNF(null);
-				n.setPlacedNF(null);
-				n.getNode().setFunctionalType(null);
-				n.getNode().setConfiguration(null);
+					n.getNode().setFunctionalType(null);
+					n.getNode().setConfiguration(null);
+				} else if(n.getTypeNF().value().equals("FORWARDER")) {
+					n.setTypeNF(null);
+					n.setPlacedNF(null);
+					n.getNode().setFunctionalType(null);
+					n.getNode().setConfiguration(null);
+				}
 			}
-		}
-		t2 = System.currentTimeMillis();
-		//testResults.setReconfiguredNetworkCompTime(t2-t1);
-		
-		if(nodesToBeReconfigured.isEmpty()) {
-			System.out.println("There are no nodes which needs to be reconfigured.");
-		} else {
-			System.out.println("The nodes to be reconfigured are ["+nodesToBeReconfigured.size()+"]:");
-			for(AllocationNode an : nodesToBeReconfigured)
-				System.out.println(an.getIpAddress());
-		}
-		
-		testResults.setBeginMaxSMTTime(t2);
-		//distributeTrafficFlows();
-		allocateFunctionsAP();
-		// Change Execution depending on chosen algorithm
-		allocationManager.configureFunctionsAP(); // atomic predicate method
-		
-		check = new Checker(ctx, nctxAP, allocationNodesAP);
-		formalizeRequirementsAP();
+			t2 = System.currentTimeMillis();
+			//testResults.setReconfiguredNetworkCompTime(t2-t1);
+
+			if(nodesToBeReconfigured.isEmpty()) {
+				System.out.println("There are no nodes which needs to be reconfigured.");
+			} else {
+				System.out.println("The nodes to be reconfigured are ["+nodesToBeReconfigured.size()+"]:");
+				for(AllocationNode an : nodesToBeReconfigured)
+					System.out.println(an.getIpAddress());
+			}
+
+			testResults.setBeginMaxSMTTime(t2);
+			//distributeTrafficFlows();
+			allocateFunctionsAP();
+			// Change Execution depending on chosen algorithm
+			allocationManager.configureFunctionsAP(); // atomic predicate method
+
+			check = new Checker(ctx, nctxAP, allocationNodesAP);
+			formalizeRequirementsAP();
 
 		}
 
@@ -493,19 +674,430 @@ public class VerefooProxy {
 			//Not yet implemented.
 		}
 	}
+
+/****************************************************** Clustering Methods *************************************************************/
+	private void addOtherNodes(NFV finalResult, Set<Node> originalNodes) {
+		List<Node> nodesAlreadyPresent = finalResult.getGraphs().getGraph().get(0).getNode();
+		List<String> nodesAlreadyPresentIp = nodesAlreadyPresent.stream().map(n -> n.getName()).collect(Collectors.toList());
+		for (Node n : originalNodes) {
+			if (!nodesAlreadyPresentIp.contains(n.getName()))
+				nodesAlreadyPresent.add(n);
+		}
+	}
+
+	public void computeOptimality(NFV root) {  // this method prints the number of firewalls and average number of rules per firewall
+		List<Node> nodes = root.getGraphs().getGraph().get(0).getNode();
+		int numberOfFirewalls = 0;
+		double numberOfRules = 0.0;
+		for (Node n : nodes) {
+			if (n.getFunctionalType() != null && n.getFunctionalType().value().equals("FIREWALL")) {
+				numberOfFirewalls++;
+				numberOfRules += (double) n.getConfiguration().getFirewall().getElements().size();
+			}
+		}
+		this.optimality = "Number of firewalls: " + numberOfFirewalls + ", average number of rules: " + (numberOfRules/numberOfFirewalls);
+		System.out.println("Number of firewalls: " + numberOfFirewalls + ", average number of rules: " + (numberOfRules/numberOfFirewalls));
+	}
+
+	private NFV mergeResults(List<NFV> results, String algo) {
+		NFV finalResult = new NFV();
+		Graph g = new Graph();
+		g.setId((long)0);
+
+		finalResult.setGraphs(new Graphs());
+		finalResult.getGraphs().getGraph().add(g);
+
+		finalResult.setPropertyDefinition(new PropertyDefinition());
+		finalResult.setConstraints(new Constraints());
+
+		for (NFV result : results) {
+			if (result != null) {
+				List<Node> nodes = result.getGraphs().getGraph().get(0).getNode();
+				List<Property> properties = result.getPropertyDefinition().getProperty();
+				for (Node node : nodes) {
+					Node nodeAlreadyPresent = g.getNode().stream().filter(n -> n.getName().equals(node.getName())).findFirst().orElseGet(() -> null);  // the node is retrived if already present in finalResult
+					if (nodeAlreadyPresent == null)
+						g.getNode().add(node);
+					else if ((nodeAlreadyPresent.getFunctionalType() == null || !nodeAlreadyPresent.getFunctionalType().value().equals("FIREWALL")) && (node.getFunctionalType() != null && node.getFunctionalType().value().equals("FIREWALL"))) { // the node already present is not a firewall while the node to add is a firewall
+						g.getNode().remove(nodeAlreadyPresent);
+						g.getNode().add(node);
+					}
+					else if ((nodeAlreadyPresent.getFunctionalType() != null && nodeAlreadyPresent.getFunctionalType().value().equals("FIREWALL")) && (node.getFunctionalType() != null && node.getFunctionalType().value().equals("FIREWALL"))) {  //both the nodes are firewalls
+						String defActNodeAlreadyPresent = nodeAlreadyPresent.getConfiguration().getFirewall().getDefaultAction().value();
+						String defActNode = node.getConfiguration().getFirewall().getDefaultAction().value();
+						List<Elements> rulesNodeAlreadyPresent = nodeAlreadyPresent.getConfiguration().getFirewall().getElements();
+						List<Elements> rulesNode = node.getConfiguration().getFirewall().getElements();
+						if (defActNodeAlreadyPresent.equals(defActNode)) { // the 2 firewalls have the same default action
+							rulesNodeAlreadyPresent.addAll(rulesNode); // add all the rules of the other firewall
+							for (Elements rule : rulesNode) {
+								if (rulesNodeAlreadyPresent.stream().filter(r -> compareElements(r,rule)).count() == 0)  //the rule is not present
+									rulesNodeAlreadyPresent.add(rule);
+							}
+	//							if (defActNode.equals("ALLOW"))  //the default action is allow
+	//								rulesNodeAlreadyPresent.addAll(rulesNode); // add all the rules of the other firewall because they are complementary
+	//							else {  // the default action is deny
+	//								// nothing happens because the two firewalls have the same rules, just leave the firewall already present
+	//								if (rulesNodeAlreadyPresent.size() < rulesNode.size()) {
+	//									g.getNode().remove(nodeAlreadyPresent);
+	//									g.getNode().add(node);
+	//								}
+	//							}
+						}
+						else {  // the 2 firewalls have a different default action
+							Node firewallAllowlist = new Node();
+							Node firewallDenylist = new Node();
+							firewallAllowlist.setName(nodeAlreadyPresent.getName());
+							firewallAllowlist.setFunctionalType(nodeAlreadyPresent.getFunctionalType());
+							firewallAllowlist.setConfiguration(new Configuration());
+							firewallAllowlist.getConfiguration().setFirewall(new Firewall());
+							firewallAllowlist.getConfiguration().getFirewall().setDefaultAction(ActionTypes.DENY);
+							firewallAllowlist.getNeighbour().addAll(nodeAlreadyPresent.getNeighbour());
+							if (nodeAlreadyPresent.getConfiguration().getFirewall().getDefaultAction().value().equals("DENY"))
+								firewallAllowlist.getConfiguration().getFirewall().getElements().addAll(nodeAlreadyPresent.getConfiguration().getFirewall().getElements());
+
+							firewallDenylist.setName(nodeAlreadyPresent.getName());
+							firewallDenylist.setFunctionalType(nodeAlreadyPresent.getFunctionalType());
+							firewallDenylist.setConfiguration(new Configuration());
+							firewallDenylist.getConfiguration().setFirewall(new Firewall());
+							firewallDenylist.getConfiguration().getFirewall().setDefaultAction(ActionTypes.ALLOW);
+							firewallDenylist.getNeighbour().addAll(nodeAlreadyPresent.getNeighbour());
+							if (nodeAlreadyPresent.getConfiguration().getFirewall().getDefaultAction().value().equals("ALLOW"))
+								firewallAllowlist.getConfiguration().getFirewall().getElements().addAll(nodeAlreadyPresent.getConfiguration().getFirewall().getElements());
+
+							List<Elements> isolationRules;
+							List<Elements> reachabilityRules;
+							if (algo.equals("AP")) {
+								Collection<FlowPathAP> crossingFlows = allocationNodesAP.values().stream().filter(ap -> ap.getIpAddress().equals(nodeAlreadyPresent.getName())).collect(Collectors.toList()).get(0).getCrossingFlows().values();
+								Collection<FlowPathAP> crossingFlowsIso = crossingFlows.stream().filter(f -> f.getRequirement().getOriginalProperty().getName().equals(PName.ISOLATION_PROPERTY)).collect(Collectors.toList());
+								Collection<FlowPathAP> crossingFlowsReach = crossingFlows.stream().filter(f -> f.getRequirement().getOriginalProperty().getName().equals(PName.REACHABILITY_PROPERTY)).collect(Collectors.toList());
+
+								isolationRules = crossingFlowsIso.stream().map(f -> {
+									Elements e = new Elements();
+									e.setAction(ActionTypes.DENY);
+									e.setSource(f.getRequirement().getOriginalProperty().getSrc());
+									e.setDestination(f.getRequirement().getOriginalProperty().getDst());
+									e.setSrcPort(f.getRequirement().getOriginalProperty().getSrcPort());
+									e.setDstPort(f.getRequirement().getOriginalProperty().getDstPort());
+									e.setProtocol(f.getRequirement().getOriginalProperty().getLv4Proto());
+									return e;
+								}).collect(Collectors.toList());
+
+								reachabilityRules = crossingFlowsReach.stream().map(f -> {
+									Elements e = new Elements();
+									e.setAction(ActionTypes.ALLOW);
+									e.setSource(f.getRequirement().getOriginalProperty().getSrc());
+									e.setDestination(f.getRequirement().getOriginalProperty().getDst());
+									e.setSrcPort(f.getRequirement().getOriginalProperty().getSrcPort());
+									e.setDstPort(f.getRequirement().getOriginalProperty().getDstPort());
+									e.setProtocol(f.getRequirement().getOriginalProperty().getLv4Proto());
+									return e;
+								}).collect(Collectors.toList());
+							}
+							else {
+								Collection<FlowPathMF> crossingFlows = allocationNodesMF.values().stream().filter(ap -> ap.getIpAddress().equals(nodeAlreadyPresent.getName())).collect(Collectors.toList()).get(0).getCrossingFlows().values();
+								Collection<FlowPathMF> crossingFlowsIso = crossingFlows.stream().filter(f -> f.getRequirement().getOriginalProperty().getName().equals(PName.ISOLATION_PROPERTY)).collect(Collectors.toList());
+								Collection<FlowPathMF> crossingFlowsReach = crossingFlows.stream().filter(f -> f.getRequirement().getOriginalProperty().getName().equals(PName.REACHABILITY_PROPERTY)).collect(Collectors.toList());
+
+								isolationRules = crossingFlowsIso.stream().map(f -> {
+									Elements e = new Elements();
+									e.setAction(ActionTypes.DENY);
+									e.setSource(f.getRequirement().getOriginalProperty().getSrc());
+									e.setDestination(f.getRequirement().getOriginalProperty().getDst());
+									e.setSrcPort(f.getRequirement().getOriginalProperty().getSrcPort());
+									e.setDstPort(f.getRequirement().getOriginalProperty().getDstPort());
+									e.setProtocol(f.getRequirement().getOriginalProperty().getLv4Proto());
+									return e;
+								}).collect(Collectors.toList());
+
+								reachabilityRules = crossingFlowsReach.stream().map(f -> {
+									Elements e = new Elements();
+									e.setAction(ActionTypes.ALLOW);
+									e.setSource(f.getRequirement().getOriginalProperty().getSrc());
+									e.setDestination(f.getRequirement().getOriginalProperty().getDst());
+									e.setSrcPort(f.getRequirement().getOriginalProperty().getSrcPort());
+									e.setDstPort(f.getRequirement().getOriginalProperty().getDstPort());
+									e.setProtocol(f.getRequirement().getOriginalProperty().getLv4Proto());
+									return e;
+								}).collect(Collectors.toList());
+							}
+
+							firewallAllowlist.getConfiguration().getFirewall().getElements().addAll(reachabilityRules);
+							firewallDenylist.getConfiguration().getFirewall().getElements().addAll(isolationRules);
+
+							g.getNode().remove(nodeAlreadyPresent);
+							if (firewallAllowlist.getConfiguration().getFirewall().getElements().size() < firewallDenylist.getConfiguration().getFirewall().getElements().size())
+								g.getNode().add(firewallAllowlist);
+							else
+								g.getNode().add(firewallDenylist);
+
+						}
+					}
+				}
+
+				for (Property prop : properties) {
+					if (!finalResult.getPropertyDefinition().getProperty().stream().anyMatch(p -> compareProperties(p, prop)))
+						finalResult.getPropertyDefinition().getProperty().add(prop);
+				}
+
+			}
+		}
+		return finalResult;
+	}
+
+	private void optimizeDuplicateFirewalls(NFV finalResult, String algo) {
+		if (finalResult == null || finalResult.getGraphs() == null || finalResult.getGraphs().getGraph().isEmpty()) {
+			return;
+		}
+		if ("AP".equals(algo)) {
+			optimizeDuplicateFirewallsAP(finalResult);
+		} else if ("MF".equals(algo)) {
+			optimizeDuplicateFirewallsMF(finalResult);
+		}
+	}
+
+	private void optimizeDuplicateFirewallsAP(NFV finalResult) {
+		if (cutOffFlowIdsAP.isEmpty()) {
+			return;
+		}
+		List<Node> finalNodes = finalResult.getGraphs().getGraph().get(0).getNode();
+		List<AtomicFlow> cutIsolationFlows = new ArrayList<>();
+		for (FlowPathAP flowPath : trafficFlowsMapAP.values()) {
+			if (!cutOffFlowIdsAP.contains(flowPath.getIdFlow())
+					|| flowPath.getRequirement().getOriginalProperty().getName() != PName.ISOLATION_PROPERTY) {
+				continue;
+			}
+			cutIsolationFlows.addAll(flowPath.getAtomicFlowsMap().values());
+		}
+		for (AtomicFlow cutFlow : cutIsolationFlows) {
+			List<String> candidateFirewalls = getAllocatedFirewallsOnAtomicFlow(cutFlow, finalNodes);
+			for (String firewallName : candidateFirewalls) {
+				Node firewall = findNodeByName(finalNodes, firewallName);
+				if (!isAllocatedFirewall(firewall)) {
+					continue;
+				}
+				boolean removable = true;
+				for (AtomicFlow isolationFlow : getIsolationAtomicFlowsCrossingNode(firewallName)) {
+					if (!hasAlternativeDenyingFirewall(isolationFlow, firewallName, finalNodes)) {
+						removable = false;
+						break;
+					}
+				}
+				if (removable) {
+					deallocateFirewall(firewall);
+				}
+			}
+		}
+	}
+
+	private void optimizeDuplicateFirewallsMF(NFV finalResult) {
+		if (cutOffFlowIdsMF.isEmpty()) {
+			return;
+		}
+		List<Node> finalNodes = finalResult.getGraphs().getGraph().get(0).getNode();
+		List<MaximalFlow> cutIsolationFlows = new ArrayList<>();
+		for (FlowPathMF flowPath : trafficFlowsMapMF.values()) {
+			if (!cutOffFlowIdsMF.contains(flowPath.getIdFlow())
+					|| flowPath.getRequirement().getOriginalProperty().getName() != PName.ISOLATION_PROPERTY) {
+				continue;
+			}
+			cutIsolationFlows.addAll(flowPath.getMaximalFlowsMap().values());
+		}
+		for (MaximalFlow cutFlow : cutIsolationFlows) {
+			List<String> candidateFirewalls = getAllocatedFirewallsOnMaximalFlow(cutFlow, finalNodes);
+			for (String firewallName : candidateFirewalls) {
+				Node firewall = findNodeByName(finalNodes, firewallName);
+				if (!isAllocatedFirewall(firewall)) {
+					continue;
+				}
+				boolean removable = true;
+				for (MaximalFlow isolationFlow : getIsolationMaximalFlowsCrossingNode(firewallName)) {
+					if (!hasAlternativeDenyingFirewall(isolationFlow, firewallName, finalNodes)) {
+						removable = false;
+						break;
+					}
+				}
+				if (removable) {
+					deallocateFirewall(firewall);
+				}
+			}
+		}
+	}
+
+	private List<AtomicFlow> getIsolationAtomicFlowsCrossingNode(String nodeName) {
+		List<AtomicFlow> isolationFlows = new ArrayList<>();
+		for (FlowPathAP flowPath : trafficFlowsMapAP.values()) {
+			if (flowPath.getRequirement().getOriginalProperty().getName() != PName.ISOLATION_PROPERTY
+					|| !atomicFlowCrossesNode(flowPath, nodeName)) {
+				continue;
+			}
+			isolationFlows.addAll(flowPath.getAtomicFlowsMap().values());
+		}
+		return isolationFlows;
+	}
+
+	private List<MaximalFlow> getIsolationMaximalFlowsCrossingNode(String nodeName) {
+		List<MaximalFlow> isolationFlows = new ArrayList<>();
+		for (FlowPathMF flowPath : trafficFlowsMapMF.values()) {
+			if (flowPath.getRequirement().getOriginalProperty().getName() != PName.ISOLATION_PROPERTY
+					|| !maximalFlowCrossesNode(flowPath, nodeName)) {
+				continue;
+			}
+			isolationFlows.addAll(flowPath.getMaximalFlowsMap().values());
+		}
+		return isolationFlows;
+	}
+
+	private List<String> getAllocatedFirewallsOnAtomicFlow(AtomicFlow flow, List<Node> finalNodes) {
+		List<String> allocatedFirewalls = new ArrayList<>();
+		for (AllocationNodeAP pathNode : flow.getFlowPathAP().getPath()) {
+			Node finalNode = findNodeByName(finalNodes, pathNode.getIpAddress());
+			if (isAllocatedFirewall(finalNode)) {
+				allocatedFirewalls.add(pathNode.getIpAddress());
+			}
+		}
+		return allocatedFirewalls;
+	}
+
+	private List<String> getAllocatedFirewallsOnMaximalFlow(MaximalFlow flow, List<Node> finalNodes) {
+		List<String> allocatedFirewalls = new ArrayList<>();
+		for (AllocationNodeMF pathNode : flow.getFlowPath().getPath()) {
+			Node finalNode = findNodeByName(finalNodes, pathNode.getIpAddress());
+			if (isAllocatedFirewall(finalNode)) {
+				allocatedFirewalls.add(pathNode.getIpAddress());
+			}
+		}
+		return allocatedFirewalls;
+	}
+
+	private boolean atomicFlowCrossesNode(FlowPathAP flowPath, String nodeName) {
+		return flowPath.getPath().stream().anyMatch(node -> node.getIpAddress().equals(nodeName));
+	}
+
+	private boolean maximalFlowCrossesNode(FlowPathMF flowPath, String nodeName) {
+		return flowPath.getPath().stream().anyMatch(node -> node.getIpAddress().equals(nodeName));
+	}
+
+	private boolean hasAlternativeDenyingFirewall(AtomicFlow flow, String excludedFirewall, List<Node> finalNodes) {
+		List<AllocationNodeAP> path = flow.getFlowPathAP().getPath();
+		List<Integer> atomicPredicates = flow.getAtomicPredicateList();
+		for (int i = 1; i < path.size(); i++) {
+			String nodeName = path.get(i).getIpAddress();
+			if (nodeName.equals(excludedFirewall)) {
+				continue;
+			}
+			Node firewall = findNodeByName(finalNodes, nodeName);
+			if (isAllocatedFirewall(firewall) && firewallDeniesPredicate(firewall, networkAtomicPredicates.get(atomicPredicates.get(i - 1)))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private boolean hasAlternativeDenyingFirewall(MaximalFlow flow, String excludedFirewall, List<Node> finalNodes) {
+		List<AllocationNodeMF> path = flow.getFlowPath().getPath();
+		List<Predicate> predicates = flow.getPredicateList();
+		for (int i = 0; i < path.size(); i++) {
+			String nodeName = path.get(i).getIpAddress();
+			if (nodeName.equals(excludedFirewall)) {
+				continue;
+			}
+			Node firewall = findNodeByName(finalNodes, nodeName);
+			if (isAllocatedFirewall(firewall) && firewallDeniesPredicate(firewall, predicates.get(i))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private boolean firewallDeniesPredicate(Node firewall, Predicate trafficPredicate) {
+		if (!isAllocatedFirewall(firewall) || trafficPredicate == null) {
+			return false;
+		}
+		Firewall configuration = firewall.getConfiguration().getFirewall();
+		ActionTypes defaultAction = configuration.getDefaultAction();
+		List<Elements> rules = configuration.getElements();
+		if (defaultAction == ActionTypes.ALLOW) {
+			return rules.stream()
+					.filter(rule -> rule.getAction() == ActionTypes.DENY)
+					.anyMatch(rule -> ruleMatchesPredicate(rule, trafficPredicate));
+		}
+		return rules.stream()
+				.filter(rule -> rule.getAction() == ActionTypes.ALLOW)
+				.noneMatch(rule -> ruleMatchesPredicate(rule, trafficPredicate));
+	}
+
+	private boolean ruleMatchesPredicate(Elements rule, Predicate trafficPredicate) {
+		Predicate rulePredicate = new Predicate(
+				normalizeFirewallField(rule.getSource()),
+				false,
+				normalizeFirewallField(rule.getDestination()),
+				false,
+				normalizeFirewallField(rule.getSrcPort()),
+				false,
+				normalizeFirewallField(rule.getDstPort()),
+				false,
+				rule.getProtocol() != null ? rule.getProtocol() : L4ProtocolTypes.ANY);
+		APUtils utils = aputilsMF != null ? aputilsMF : aputilsAP;
+		Predicate intersection = utils.computeIntersection(rulePredicate, trafficPredicate);
+		return intersection != null && utils.APCompare(intersection, trafficPredicate);
+	}
+
+	private String normalizeFirewallField(String value) {
+		return value == null || value.equals("null") ? "*" : value;
+	}
+
+	private boolean isAllocatedFirewall(Node node) {
+		return node != null && node.getFunctionalType() == FunctionalTypes.FIREWALL && node.getConfiguration() != null
+				&& node.getConfiguration().getFirewall() != null;
+	}
+
+	private Node findNodeByName(List<Node> nodes, String nodeName) {
+		return nodes.stream().filter(node -> node.getName().equals(nodeName)).findFirst().orElse(null);
+	}
+
+	private void deallocateFirewall(Node firewall) {
+		firewall.setFunctionalType(null);
+		firewall.setConfiguration(null);
+	}
+
+	private boolean compareProperties(Property p1, Property p2) {
+		//boolean equals = true;
+		if ((p1.getSrc() == null && p2.getSrc() != null) || (p1.getSrc() != null && p2.getSrc() == null) || (p1.getSrc() != null && p2.getSrc() != null && !p1.getSrc().equals(p2.getSrc())))
+			return false;
+		if ((p1.getSrcPort() == null && p2.getSrcPort() != null) || (p1.getSrcPort() != null && p2.getSrcPort() == null) || (p1.getSrcPort() != null && p2.getSrcPort() != null && !p1.getSrcPort().equals(p2.getSrcPort())))
+			return false;
+		if ((p1.getDst() == null && p2.getDst() != null) || (p1.getDst() != null && p2.getDst() == null) || (p1.getDst() != null && p2.getDst() != null && !p1.getDst().equals(p2.getDst())))
+			return false;
+		if ((p1.getDstPort() == null && p2.getDstPort() != null) || (p1.getDstPort() != null && p2.getDstPort() == null) || (p1.getDstPort() != null && p2.getDstPort() != null && !p1.getDstPort().equals(p2.getDstPort())))
+			return false;
+
+	//		if (p1.getSrc().equals(p2.getSrc()) && p1.getSrcPort().equals(p2.getSrcPort()) && p1.getDst().equals(p2.getDst()) && p1.getDstPort().equals(p2.getDstPort()) && p1.getLv4Proto() == p2.getLv4Proto())
+	//			return true;
+		return true;
+	}
+
+	private boolean compareElements(Elements e1, Elements e2) {
+		if (e1.getSource().equals(e2.getSource()) && e1.getSrcPort().equals(e2.getSrcPort()) && e1.getDestination().equals(e2.getDestination()) && e1.getDstPort().equals(e2.getDstPort()))
+			return true;
+		return false;
+	}
+
+	public NFV getMergedNFV() {
+		return this.mergedNFV;
+	}
 /**************************************************Atomic Predicate Methods **************************************************************/
-	
+
 
 	/**
 	 * This function receives in input a set of already computed Atomic Predicates
 	 * (atomicPredicates) and a set of Predicates (predicates), not yet atomic, to convert
 	 * and add to the set.
 	 */
-	
+
 	private void computeAtomicFlows() {
 		ExecutorService threadPool = Executors.newFixedThreadPool(10);
 		List<Future<?>> tasks = new ArrayList<Future<?>>();
-		
+
 		System.out.println("NUMBER OF REQUIREMENTS: " + securityRequirements.size());
 		System.out.println("Computing atomic flows:");
 		AtomicInteger atomicId = new AtomicInteger();
@@ -517,10 +1109,10 @@ public class VerefooProxy {
 			}
 			debugIndex++;
 			System.out.print("*");
-			APUtilsAP aputilsNew = new APUtilsAP(); 
+			APUtilsAP aputilsNew = new APUtilsAP();
 			tasks.add(threadPool.submit(new GenerateFlowsTask(sr, networkAtomicPredicates, aputilsNew, transformersNode, atomicId)));
 		}
-		
+
 		threadPool.shutdown();
 		//Join results
 		for(Future<?> fut: tasks) {
@@ -530,12 +1122,12 @@ public class VerefooProxy {
 				e.printStackTrace();
 			}
 		}
-		System.out.println();	
-		
+		System.out.println();
+
 	/*	//DEBUG: print atomic flows for each requirement
 		for(SecurityRequirement sr : securityRequirements.values()) {
 			Property prop = sr.getOriginalProperty();
-			System.out.println("\nConsidering requirement {"+prop.getSrc()+","+prop.getSrcPort()+","+prop.getDst()+","+prop.getDstPort()+","+prop.getLv4Proto()+"}");   
+			System.out.println("\nConsidering requirement {"+prop.getSrc()+","+prop.getSrcPort()+","+prop.getDst()+","+prop.getDstPort()+","+prop.getLv4Proto()+"}");
 			for(FlowPath flow: sr.getFlowsMap().values()) {
 				Map<Integer, AtomicFlow> atomicFlowsMap = flow.getAtomicFlowsMap();
 				Map<Integer, AtomicFlow> atomicFlowsToDiscardMap = flow.getAtomicFlowsToDiscardMap();
@@ -566,7 +1158,7 @@ public class VerefooProxy {
 		}
 		System.out.println();
 		//END DEBUG*/
-		
+
 		//Total number of flows
 		long totalFlows = 0;
 		for(SecurityRequirement sr : securityRequirements.values()) {
@@ -575,7 +1167,7 @@ public class VerefooProxy {
 			}
 		}
 		testResults.setTotalFlows(totalFlows);
-		
+
 		//built map that assign to each allocation node the set of atomic predicates in input
 		for(SecurityRequirement sr : securityRequirements.values()) {
 			for(FlowPathAP flowPath: sr.getFlowsMapAP().values()) {
@@ -585,46 +1177,46 @@ public class VerefooProxy {
 					int index = 1;
 					for(Integer ap: atomicFlow.getAtomicPredicateList()) {
 						path.get(index).addAtomicPredicateInInput(flowPath.getIdFlow(), atomicFlow.getFlowId(), ap);
-						if(transformersNode.containsKey(path.get(index).getIpAddress()) 
+						if(transformersNode.containsKey(path.get(index).getIpAddress())
 								&& transformersNode.get(path.get(index).getIpAddress()).getFunctionalType() == FunctionalTypes.FIREWALL) {
 							//If the node is a firewall, check if the predicate is allowed to pass or if it is dropped
 							if(path.get(index).getForwardBehaviourList().contains(ap) || path.get(index).getDroppedList().contains(ap))
-								{
+							{
 								index++;
 								continue; //already checked
-								}
+							}
 							boolean foundIntersection = false;
 							for(Predicate allowed: path.get(index).getForwardBehaviourPredicateList()) {
 								Predicate intersectionPredicate = aputilsAP.computeIntersection(networkAtomicPredicates.get(ap), allowed);
 								if(intersectionPredicate != null && aputilsAP.APCompare(intersectionPredicate, networkAtomicPredicates.get(ap))) {
-									foundIntersection = true;	
+									foundIntersection = true;
 									break;
 								}
 							}
-							
+
 							if(foundIntersection) {
 								path.get(index).addForwardingPredicate(ap);
 							} else {
 								path.get(index).addDroppedPredicate(ap);
 							}
 						}
-						
-						if(transformersNode.containsKey(path.get(index).getIpAddress()) 
+
+						if(transformersNode.containsKey(path.get(index).getIpAddress())
 								&& transformersNode.get(path.get(index).getIpAddress()).getFunctionalType() == FunctionalTypes.STATEFUL_FIREWALL) {
 							StatefulPacketFilter spf = (StatefulPacketFilter) path.get(index).getPlacedNF();
 							if(spf.getAllowAtomicPredicates().values().contains(ap) || spf.getDenyAtomicPredicates().contains(ap) || spf.getAllowCondAtomicPredicates().values().contains(ap) || spf.getAllowCondInvAtomicPredicates().values().contains(ap))
 								continue; //already checked
-							
+
 							boolean foundIntersection = false;
 							System.out.println("ALLOWEDCOND: " );
 							for(Map.Entry<Integer,Predicate> allowedCond: spf.getAllowCondPredicates().entrySet()) {
 								allowedCond.getValue().print();
 								Predicate intersectionPredicate = aputilsAP.computeIntersection(networkAtomicPredicates.get(ap), allowedCond.getValue());
 								if(intersectionPredicate != null && aputilsAP.APCompare(intersectionPredicate, networkAtomicPredicates.get(ap))) {
-									foundIntersection = true;	
+									foundIntersection = true;
 									spf.addAllowCondAtomicPredicate(allowedCond.getKey(), ap);
 									break;
-								} 
+								}
 							}
 							if(!foundIntersection) {
 								System.out.println("ALLOWEDCONDINV: " );
@@ -632,10 +1224,10 @@ public class VerefooProxy {
 									allowedCondInv.getValue().print();
 									Predicate intersectionPredicate = aputilsAP.computeIntersection(networkAtomicPredicates.get(ap), allowedCondInv.getValue());
 									if(intersectionPredicate != null && aputilsAP.APCompare(intersectionPredicate, networkAtomicPredicates.get(ap))) {
-										foundIntersection = true;	
+										foundIntersection = true;
 										spf.addAllowCondInvAtomicPredicate(allowedCondInv.getKey(), ap);
 										break;
-									} 
+									}
 								}
 								if(!foundIntersection) {
 									System.out.println("ALLOWED: " );
@@ -643,10 +1235,10 @@ public class VerefooProxy {
 										allowed.getValue().print();
 										Predicate intersectionPredicate = aputilsAP.computeIntersection(networkAtomicPredicates.get(ap), allowed.getValue());
 										if(intersectionPredicate != null && aputilsAP.APCompare(intersectionPredicate, networkAtomicPredicates.get(ap))) {
-											foundIntersection = true;	
+											foundIntersection = true;
 											spf.addAllowAtomicPredicate(allowed.getKey(), ap);
 											break;
-										} 
+										}
 									}
 									if(!foundIntersection) {
 										System.out.println("DENIED: " );
@@ -655,18 +1247,18 @@ public class VerefooProxy {
 									}
 								}
 							}
-							
+
 						}
-												
+
 						index++;
 					}
-					
-					
+
+
 				}
 			}
 		}
 	}
-	
+
 // For debugging purposes must have two classes of it one for AP and one for MF
 	/*
 	private void printTransformations() {
@@ -688,11 +1280,11 @@ public class VerefooProxy {
 	}*/
 
 	/**
-	 * Compute the structures of support for transformers: for each NAT compute the transforming map, for each FIREWALL its deny/allow lists 
+	 * Compute the structures of support for transformers: for each NAT compute the transforming map, for each FIREWALL its deny/allow lists
 	 * i.e. a NAT will have a map of entry for example {10: 5} which means that the atomic predicates 10 arrives at the nat and it is transformed in
 	 * atomic predicate 5.
 	 * a fire wall instead will have a list of id for example [1,2,5,6,10 ...], that are the identifiers of atomic predicates allowed to cross the firewall,
-	 * all the other predicates will be dropped 
+	 * all the other predicates will be dropped
 	 */
 	private void fillTransformationMap() {
 		System.out.println("Filling transformers map");
@@ -706,10 +1298,10 @@ public class VerefooProxy {
 				HashMap<String, List<Integer>> reconvertedMap = new HashMap<>();  //grouped by source address
 				List<Integer> notChaingingPredicateList = new ArrayList<>();
 				List<IPAddress> natIPSrcAddressList = new ArrayList<>();
-				for(String src: node.getConfiguration().getNat().getSource()) 
+				for(String src: node.getConfiguration().getNat().getSource())
 					natIPSrcAddressList.add(new IPAddress(src, false));
 				IPAddress natIPAddress = new IPAddress(node.getName(), false);
-				
+
 				for(HashMap.Entry<Integer, Predicate> apEntry: networkAtomicPredicates.entrySet()) {
 					Predicate ap = apEntry.getValue();
 					//if source ip address list or dest ip address list have size != 1, it means it is a complex predicates so it can not be a shodowing/reconversion predicates
@@ -725,7 +1317,7 @@ public class VerefooProxy {
 							} else {
 								shadowedMap.get(ap.firstIPDstToString()).add(apEntry.getKey());
 							}
-						} 
+						}
 						else {
 							//1*: if dest is not a src address of the NAT (so it is a public address), while src is a src address of NAT (private address),
 							//this is a shadowing predicates {private address, public address}
@@ -773,7 +1365,7 @@ public class VerefooProxy {
 							if(aputilsAP.APComparePrototypeList(
 									networkAtomicPredicates.get(shing).getProtoTypeList(), networkAtomicPredicates.get(shed).getProtoTypeList())
 									&& aputilsAP.APComparePortList(networkAtomicPredicates.get(shing).getpSrcList(), networkAtomicPredicates.get(shed).getpSrcList())
-									&& aputilsAP.APComparePortList(networkAtomicPredicates.get(shing).getpDstList(), networkAtomicPredicates.get(shed).getpDstList())) 
+									&& aputilsAP.APComparePortList(networkAtomicPredicates.get(shing).getpDstList(), networkAtomicPredicates.get(shed).getpDstList()))
 								result.add(shed);
 						}
 						resultMap.put(shing, result);
@@ -797,7 +1389,7 @@ public class VerefooProxy {
 		}
 		System.out.println();
 	}
-	
+
 	/** This function, starting from source and destination of each requirement, computes the related atomic predicates. Then add to the computed set
 	 * also atomic predicates representing input packet classes for each transformer (here we are considering only NAT and firewall)
 	 * @return HashMap<Integer,Predicate> mapping the predicates to integers
@@ -820,20 +1412,20 @@ public class VerefooProxy {
 			String pDst = property.getDstPort() != null &&  !property.getDstPort().equals("null") ? property.getDstPort() : "*";
 			L4ProtocolTypes proto = property.getLv4Proto() != null ? property.getLv4Proto() : L4ProtocolTypes.ANY;
 			srcList.add("*"); dstList.add("*"); srcPList.add("*"); dstPList.add("*"); dstProtoList.add(L4ProtocolTypes.ANY);
-			
+
 			//if we have already inserted this source into the list, we can skip it
 			if(!srcList.contains(IPSrc) || !srcPList.contains(pSrc)) {
 				if(!srcList.contains(IPSrc))
 					srcList.add(IPSrc);
 				else IPSrc = "*";
-				if(!srcPList.contains(pSrc)) 
+				if(!srcPList.contains(pSrc))
 					srcPList.add(pSrc);
 				else pSrc = "*";
-				
+
 				Predicate srcPredicate = new Predicate(IPSrc, false, "*", false, pSrc, false, "*", false, L4ProtocolTypes.ANY);
 				predicates.add(srcPredicate);
 			}
-			
+
 			//if we have already inserted this destination into the list, we can skip it
 			if(!dstList.contains(IPDst) || !dstPList.contains(pDst) || !dstProtoList.contains(proto)) {
 				if(!dstList.contains(IPDst)) dstList.add(IPDst);
@@ -842,7 +1434,7 @@ public class VerefooProxy {
 				else pDst = "*";
 				if(!dstProtoList.contains(proto)) dstProtoList.add(proto);
 				else proto = L4ProtocolTypes.ANY;
-				
+
 				Predicate dstPredicate = new Predicate("*", false, IPDst, false, "*", false, pDst, false, proto);
 				predicates.add(dstPredicate);
 			}
@@ -888,25 +1480,25 @@ public class VerefooProxy {
 					predicates.add(rcpred);
 				}
 				//Add shadowed predicate: this is enough, all the others have already been added
-				predicates.add(new Predicate(node.getName(), false, "*", false, "*", false, "*", false, L4ProtocolTypes.ANY));	
-			} 
-				//If the node is a firewall, compute its allowed rules list
-				//Algorithm 1 Yang_Lam 2015
-				else if(node.getFunctionalType() == FunctionalTypes.FIREWALL) {
-				
+				predicates.add(new Predicate(node.getName(), false, "*", false, "*", false, "*", false, L4ProtocolTypes.ANY));
+			}
+			//If the node is a firewall, compute its allowed rules list
+			//Algorithm 1 Yang_Lam 2015
+			else if(node.getFunctionalType() == FunctionalTypes.FIREWALL) {
+
 				List<Predicate> allowedList = new ArrayList<>();
 				List<Predicate> deniedList = new ArrayList<>();
-				
+
 				boolean deniedListChanged = false;
 				for(Elements rule: node.getConfiguration().getFirewall().getElements()) {
 					if(rule.getAction().equals(ActionTypes.DENY)) {
 						//deny <--- deny V rule-i
-						deniedList.add(new Predicate(rule.getSource(), false, rule.getDestination(), false, 
+						deniedList.add(new Predicate(rule.getSource(), false, rule.getDestination(), false,
 								rule.getSrcPort(), false, rule.getDstPort(), false, rule.getProtocol()));
 						deniedListChanged = true;
 					} else {
 						//allowed <--- allowed V (rule-i AND !denied)
-						Predicate toAdd = new Predicate(rule.getSource(), false, rule.getDestination(), false, 
+						Predicate toAdd = new Predicate(rule.getSource(), false, rule.getDestination(), false,
 								rule.getSrcPort(), false, rule.getDstPort(), false, rule.getProtocol());
 						List<Predicate> allowedToAdd = aputilsAP.computeAllowedForRule(toAdd, deniedList, deniedListChanged);
 						for(Predicate allow: allowedToAdd) {
@@ -924,7 +1516,7 @@ public class VerefooProxy {
 							allowedList.add(allow);
 					}
 				}
-				
+
 				//Insert allowed list into predicates (with optimization)
 				for(Predicate p: allowedList) {
 					for(IPAddress IPSrc: p.getIPSrcList()) {
@@ -962,33 +1554,33 @@ public class VerefooProxy {
 						}
 					}
 				}
-				
+
 				//the algorithm returns the allowed predicates list (if we want also the denied predicates list, we can compute allowed list negation)
 				allocationNodesAP.get(node.getName()).setForwardBehaviourPredicateList(allowedList);
 			} else if(node.getFunctionalType() == FunctionalTypes.STATEFUL_FIREWALL) {
-				
+
 				AllocationNodeAP an  = allocationNodesAP.get(node.getName());
 				StatefulPacketFilter spf = (StatefulPacketFilter) an.getPlacedNF();
-				
-				
+
+
 				List<Predicate> allowedList = new ArrayList<>();
 				List<Predicate> deniedList = new ArrayList<>();
 				int aIndex = 0;
-		   		int dIndex = 0;
-		   		int acIndex = 0;
-				
+				int dIndex = 0;
+				int acIndex = 0;
+
 				boolean deniedListChanged = false;
 				for(Elements rule: node.getConfiguration().getStatefulFirewall().getElements()) {
 					if(rule.getAction().equals(ActionTypes.DENY)) {
 						//deny <--- deny V rule-i
-						Predicate predicate = new Predicate(rule.getSource(), false, rule.getDestination(), false, 
+						Predicate predicate = new Predicate(rule.getSource(), false, rule.getDestination(), false,
 								rule.getSrcPort(), false, rule.getDstPort(), false, rule.getProtocol());
 						deniedList.add(predicate);
 						spf.addDenyPredicate(dIndex++, predicate);
 						deniedListChanged = true;
 					} else if (rule.getAction().equals(ActionTypes.ALLOW)) {
 						//allowed <--- allowed V (rule-i AND !denied)
-						Predicate toAdd = new Predicate(rule.getSource(), false, rule.getDestination(), false, 
+						Predicate toAdd = new Predicate(rule.getSource(), false, rule.getDestination(), false,
 								rule.getSrcPort(), false, rule.getDstPort(), false, rule.getProtocol());
 						List<Predicate> allowedToAdd = aputilsAP.computeAllowedForRule(toAdd, deniedList, deniedListChanged);
 						for(Predicate allow: allowedToAdd) {
@@ -997,9 +1589,9 @@ public class VerefooProxy {
 						}
 						//spf.addAllowPredicate(aIndex++, toAdd);
 					} else {
-						Predicate predicate = new Predicate(rule.getSource(), false, rule.getDestination(), false, 
+						Predicate predicate = new Predicate(rule.getSource(), false, rule.getDestination(), false,
 								rule.getSrcPort(), false, rule.getDstPort(), false, rule.getProtocol());
-						Predicate invPredicate = new Predicate(rule.getDestination(), false, rule.getSource(), false, 
+						Predicate invPredicate = new Predicate(rule.getDestination(), false, rule.getSource(), false,
 								rule.getDstPort(), false, rule.getSrcPort(), false, rule.getProtocol());
 						if(node.getConfiguration().getStatefulFirewall().getDefaultAction().equals(ActionTypes.DENY)) {
 							List<Predicate> allowedToAdd = aputilsAP.computeAllowedForRule(predicate, deniedList, deniedListChanged);
@@ -1021,14 +1613,14 @@ public class VerefooProxy {
 							allowedList.add(allow);
 					}
 				}
-				
+
 				//Insert allowed list into predicates (with optimization)
 				for(Predicate p: allowedList) {
-					
+
 					//insert allowed list in the map of SPF
 					spf.addAllowPredicate(aIndex++, p);
-					
-					
+
+
 					for(IPAddress IPSrc: p.getIPSrcList()) {
 						String ips = IPSrc.toString();
 						if(!srcList.contains(ips)) {
@@ -1064,7 +1656,7 @@ public class VerefooProxy {
 						}
 					}
 				}
-				
+
 				//Insert predicates related to the "conditional allow" rules
 				List<Predicate> mergedList = new ArrayList<>();
 				mergedList.addAll(spf.getAllowCondPredicates().values());
@@ -1105,10 +1697,10 @@ public class VerefooProxy {
 						}
 					}
 				}
-				
+
 				//the algorithm returns the allowed predicates list (if we want also the denied predicates list, we can compute allowed list negation)
 				allocationNodesAP.get(node.getName()).setForwardBehaviourPredicateList(allowedList);
-				
+
 			}
 		}
 
@@ -1120,14 +1712,14 @@ public class VerefooProxy {
 
 		//Now we have the list of predicates on which we have to compute the set of atomic predicates, so compute atomic predicates
 		atomicPredicates = aputilsAP.computeAtomicPredicates(atomicPredicates, predicates);
-		
+
 		//Give to each atomic predicate an identifier
 		int index = 0;
 		for(Predicate p: atomicPredicates) {
 			networkAtomicPredicates.put(index, p);
 			index++;
 		}
-		
+
 		//DEBUG: print atomic predicates
 //		System.out.println("ATOMIC PREDICATES " + networkAtomicPredicates.size());
 //		for(HashMap.Entry<Integer, Predicate> entry: networkAtomicPredicates.entrySet()) {
@@ -1135,10 +1727,10 @@ public class VerefooProxy {
 //			entry.getValue().print();
 //		}
 		//END DEBUG
-	
+
 		return networkAtomicPredicates;
 	}
-	
+
 	private List<Property> computeKeptList(List<Property> set1, List<Property> set2){
 		List<Property> kept = new ArrayList<Property>();
 		for(Property p1: set1) {
@@ -1151,7 +1743,7 @@ public class VerefooProxy {
 		}
 		return kept;
 	}
-	
+
 	private boolean propertyCompare(Property p1, Property p2) {
 		if(!p1.getName().value().equals(p2.getName().value()))
 			return false;
@@ -1167,7 +1759,7 @@ public class VerefooProxy {
 			return false;
 		return true;
 	}
-	
+
 	private List<AllocationNodeAP> computeReconfiguredNetwork() {
 		List<AllocationNodeAP> nodes;
 		List<AllocationNodeAP> toBeReconfigured = new ArrayList<>();
@@ -1175,7 +1767,7 @@ public class VerefooProxy {
 		List<AllocationNodeAP> tmpFlowNodes;
 		Boolean found,foundTmp,NAT;
 		Integer index;
-		
+
 		for(SecurityRequirement sr : toAddSecurityRequirements.values()) {
 			if(sr.getOriginalProperty().getName().toString().equals("ISOLATION_PROPERTY")) {
 				//Iterate over all of the correlated Atomic Flows
@@ -1187,7 +1779,7 @@ public class VerefooProxy {
 						for(AllocationNodeAP n : nodes.subList(1, nodes.size()-1)) {
 							//check if the node blocks the traffic
 							if(n.getNode().getFunctionalType() != null) {
-								if(n.getNode().getFunctionalType().value().equals("FIREWALL") 
+								if(n.getNode().getFunctionalType().value().equals("FIREWALL")
 										&& n.getDroppedList().contains(af.getAtomicPredicateList().get(index))) {
 									found = true;
 									break;
@@ -1221,12 +1813,12 @@ public class VerefooProxy {
 						NAT = false;
 						for(AllocationNodeAP n : nodes.subList(1, nodes.size()-1)) {
 							//check if there is a NAT on the path
-							if(!NAT && n.getNode().getFunctionalType() != null 
+							if(!NAT && n.getNode().getFunctionalType() != null
 									&& n.getNode().getFunctionalType().value().equals("NAT")) {
 								NAT = true;
-							//check if the node blocks the traffic
-							} else if (n.getNode().getFunctionalType() != null 
-									&& n.getNode().getFunctionalType().value().equals("FIREWALL") 
+								//check if the node blocks the traffic
+							} else if (n.getNode().getFunctionalType() != null
+									&& n.getNode().getFunctionalType().value().equals("FIREWALL")
 									&& n.getDroppedList().contains(af.getAtomicPredicateList().get(index))) {
 
 								tmpFlowNodes.add(n);
@@ -1246,15 +1838,15 @@ public class VerefooProxy {
 													for(int i=0; i<fp.getPath().size(); i++) {
 														an = fp.getPath().get(i);
 														//Search for the node when ap1 != ap2
-														if(an.getNode().getFunctionalType() != null 
+														if(an.getNode().getFunctionalType() != null
 																&& an.getNode().getFunctionalType().value().equals("NAT")) {
 															//reconfigure previous node (if it is a FORWARDER)
 															if(fp.getPath().get(i-1).getNode().getFunctionalType() != null && fp.getPath().get(i-1).getNode().getFunctionalType().value().equals("FORWARDER"))
 																tmpFlowNodes.add(fp.getPath().get(i-1));
-															
+
 														}
 														if(an.getIpAddress().equals(n.getIpAddress()))
-																break;
+															break;
 													}
 												}
 											}
@@ -1288,7 +1880,7 @@ public class VerefooProxy {
 		return toBeReconfigured;
 	}
 
-	
+
 /*****************************************************AP duplicated methods**************************************************************************/
 	/**
 	 * This method allocates the functions on allocation nodes that are empty.
@@ -1304,7 +1896,7 @@ public class VerefooProxy {
 				allocationManager.chooseFunctionsAP(nodes.get(i), source, last);
 			}
 		}
-		
+
 	}
 
 
@@ -1312,24 +1904,24 @@ public class VerefooProxy {
 	 * This method creates the hard constraints in the z3 model for reach-ability and isolation requirements.
 	 */
 	private void formalizeRequirementsAP() {
-		
+
 		for(SecurityRequirement sr : securityRequirements.values()) {
 			switch (sr.getOriginalProperty().getName()) {
-			case ISOLATION_PROPERTY:
-				check.createRequirementConstraintsAP(sr, Prop.ISOLATION);
-				break;
-			case REACHABILITY_PROPERTY:
-				check.createRequirementConstraintsAP(sr, Prop.REACHABILITY);
-				break;
-			case COMPLETE_REACHABILITY_PROPERTY:
-				check.createRequirementConstraintsAP(sr, Prop.COMPLETE_REACHABILITY);
-				break;
-			default:
-				throw new BadGraphError("Error in the property definition", EType.INVALID_PROPERTY_DEFINITION);
+				case ISOLATION_PROPERTY:
+					check.createRequirementConstraintsAP(sr, Prop.ISOLATION);
+					break;
+				case REACHABILITY_PROPERTY:
+					check.createRequirementConstraintsAP(sr, Prop.REACHABILITY);
+					break;
+				case COMPLETE_REACHABILITY_PROPERTY:
+					check.createRequirementConstraintsAP(sr, Prop.COMPLETE_REACHABILITY);
+					break;
+				default:
+					throw new BadGraphError("Error in the property definition", EType.INVALID_PROPERTY_DEFINITION);
 			}
-				
+
 		}
-		
+
 	}
 
 
@@ -1340,13 +1932,13 @@ public class VerefooProxy {
 	private HashMap<Integer, FlowPathAP> generateFlowPathsAP(){
 		HashMap<Integer, FlowPathAP> flowsMap = new HashMap<>();
 		int id = 0;
-		
+
 		for(SecurityRequirement sr : securityRequirements.values()) {
 			Property property = sr.getOriginalProperty();
-			
+
 			//first, this method finds if a forwarding path has been defined by the user for the requirement
 			//in that case, the research is not performed for that specific requirement
-			
+
 			Path definedPath = null;
 			if(paths != null) {
 				for(Path p : paths) {
@@ -1354,11 +1946,11 @@ public class VerefooProxy {
 					String last = p.getPathNode().get(p.getPathNode().size()-1).getName();
 					if(first.equals(property.getSrc()) && last.equals(property.getDst())) {
 						definedPath = p;
-					}	
+					}
 				}
 			}
-			
-			
+
+
 			boolean found = false;
 			List<List<AllocationNodeAP>> allPaths = new ArrayList<>();
 			List<AllocationNodeAP> localPath = new ArrayList<>();
@@ -1380,7 +1972,7 @@ public class VerefooProxy {
 				}
 				allPaths.add(localPath);
 			}
-			
+
 			if(found) {
 				for(List<AllocationNodeAP> singlePath : allPaths) {
 					FlowPathAP flow = new FlowPathAP(sr, singlePath, id);
@@ -1388,21 +1980,21 @@ public class VerefooProxy {
 					sr.getFlowsMapAP().put(id, flow);
 					id++;
 				}
-				
+
 			} else {
 				throw new BadGraphError("There is no path between " + property.getSrc() + " and " + property.getDst(),
 						EType.INVALID_SERVICE_GRAPH);
 			}
-		
+
 		}
-		
-		return flowsMap;	
+
+		return flowsMap;
 	}
 
 	/**
 	 * This method is recursively called to generate the path of nodes for each requirement specific to Atomic Predicates.
 	 * @param allPaths it is the list of all the paths that have been computed for the requirement
-	 * @param currentPath it is the current path that the method is building 
+	 * @param currentPath it is the current path that the method is building
 	 * @param source it is the source of the path
 	 * @param destination it is the destination of the path
 	 * @param current it is the current node in the recursive visit
@@ -1411,8 +2003,8 @@ public class VerefooProxy {
 	 * @return true if a path has been identified, false otherwise
 	 */
 	private void recursivePathGenerationAP(List<List<AllocationNodeAP>> allPaths, List<AllocationNodeAP> currentPath, AllocationNodeAP source,
-			AllocationNodeAP destination, AllocationNodeAP current, Set<String> visited, int level) {
-		
+	                                       AllocationNodeAP destination, AllocationNodeAP current, Set<String> visited, int level) {
+
 		currentPath.add(level, current);
 		visited.add(current.getNode().getName());
 		List<Neighbour> listNeighbours = current.getNode().getNeighbour();
@@ -1420,7 +2012,7 @@ public class VerefooProxy {
 			//I save the completed path and search for others
 			List<AllocationNodeAP> pathToStore = new ArrayList<>();
 			for(int i = 0; i < currentPath.size(); i++) {
-				if((currentPath.get(i).getNode().getFunctionalType() == FunctionalTypes.NAT 
+				if((currentPath.get(i).getNode().getFunctionalType() == FunctionalTypes.NAT
 						|| currentPath.get(i).getNode().getFunctionalType() == FunctionalTypes.FIREWALL
 						&& !transformersNode.containsKey(currentPath.get(i).getNode().getName())))
 					transformersNode.put(currentPath.get(i).getNode().getName(), currentPath.get(i).getNode());
@@ -1439,8 +2031,8 @@ public class VerefooProxy {
 				return;
 			}
 		}
-		
-		
+
+
 
 		for(Neighbour n : listNeighbours) {
 			if(!visited.contains(n.getName())) {
@@ -1449,9 +2041,9 @@ public class VerefooProxy {
 				recursivePathGenerationAP(allPaths, currentPath, source, destination, neighbourNode, visited, level);
 				level--;
 			}
-					
+
 		}
-		
+
 		visited.remove(current.getNode().getName());
 		currentPath.remove(level);
 		return;
@@ -1459,7 +2051,7 @@ public class VerefooProxy {
 
 
 
-	
+
 	/**
 	 * This method generates the NetContext object for the initialization of z3 model specific to atomic Predicates.
 	 * @param ctx2 it is the z3 Context object
@@ -1469,7 +2061,7 @@ public class VerefooProxy {
 	 * @return the NetContext object
 	 */
 	private NetContextAP nctxGenerateAP(Context ctx2, List<Node> nodes2, List<Property> prop,
-			HashMap<String, AllocationNodeAP> allocationNodes2) {
+	                                    HashMap<String, AllocationNodeAP> allocationNodes2) {
 		for (Node n : nodes) {
 			if (n.getName().contains("@"))
 				throw new BadGraphError("Invalid node name " + n.getName() + ", it can't contain @",
@@ -1490,18 +2082,31 @@ public class VerefooProxy {
 
 	/**
 	 * Checks if the service graph satisfies all the imposed conditions
-	 * 
+	 *
 	 * @return
 	 */
 	public VerificationResult checkNFFGPropertyAP() {
+		// FIX: If running in parallel, global check is null. Return the aggregated result.
+		if (this.check == null) {
+			VerificationResult ret = new VerificationResult(
+					this.ctx,
+					this.sat ? Status.SATISFIABLE : Status.UNSATISFIABLE,
+					this.nctxAP,
+					null,
+					null
+			);
+			// Fallback to 0 to compile safely.
+			// Real times are tracked inside RunResultGurobi for each cluster.
+			ret.time = 0;
+			return ret;
+		}
 		VerificationResult ret = this.check.propertyCheckAP();
 		ret.time = this.check.getTimeChecker();
 		return ret;
 	}
-
 	/**
 	 * Get Net Context
-	 * 
+	 *
 	 * @return the net context
 	 */
 	public NetContextAP getNctxAP() {
@@ -1516,27 +2121,27 @@ public class VerefooProxy {
 		return allocationNodesAP;
 	}
 
-	
+
 	/**
 	 * @return all the requirements
 	 */
 	public Map<Integer, FlowPathAP> getTrafficFlowsMapAP(){
 		return trafficFlowsMapAP;
 	}
-	
-	
+
+
 	/**
 	 * Get Time Results
-	 * 
+	 *
 	 * @return the Time Results
 	 */
 	public TestResults getTestTimeResults() {
 		return testResults;
 	}
-	
+
 	/**
 	 * Get Context
-	 * 
+	 *
 	 * @return the context
 	 */
 	public Context getCtx() {
@@ -1545,7 +2150,7 @@ public class VerefooProxy {
 
 	/**
 	 * Get the list of properties
-	 * 
+	 *
 	 * @return the property list
 	 */
 	public List<Property> getProperties() {
@@ -1554,7 +2159,7 @@ public class VerefooProxy {
 
 	/**
 	 * Get the list of paths
-	 * 
+	 *
 	 * @return the path list
 	 */
 	public List<Path> getPaths() {
@@ -1563,7 +2168,7 @@ public class VerefooProxy {
 
 	/**
 	 * Get the wildCardManager object
-	 * 
+	 *
 	 * @return the Wild Card Manager object
 	 */
 	public WildcardManager getWildcardManager() {
@@ -1572,7 +2177,7 @@ public class VerefooProxy {
 
 	/**
 	 * Get the Security Requirements and there integer mapping
-	 * 
+	 *
 	 * @return the HashMap containing Security Requirements with there integer mapping
 	 */
 	public HashMap<Integer, SecurityRequirement> getSecurityRequirements() {
@@ -1581,7 +2186,7 @@ public class VerefooProxy {
 
 	/**
 	 * Get the Checker
-	 * 
+	 *
 	 * @return the Checker object
 	 */
 	public Checker getCheck() {
@@ -1590,7 +2195,7 @@ public class VerefooProxy {
 
 	/**
 	 * Get the list of Nodes
-	 * 
+	 *
 	 * @return the Nodes list
 	 */
 	public List<Node> getNodes() {
@@ -1599,7 +2204,7 @@ public class VerefooProxy {
 
 	/**
 	 * Get the list of Node Metrics
-	 * 
+	 *
 	 * @return the Node Metrics list
 	 */
 	public List<NodeMetrics> getNodeMetrics() {
@@ -1608,7 +2213,7 @@ public class VerefooProxy {
 
 	/**
 	 * Get the list of properties
-	 * 
+	 *
 	 * @return the property list
 	 */
 	public AllocationManager getAllocationManager() {
@@ -1617,16 +2222,16 @@ public class VerefooProxy {
 
 	/**
 	 * Get the APUtilsAP
-	 * 
+	 *
 	 * @return the APUtilsAP class Object
 	 */
 	public APUtilsAP getAputilsAP() {
 		return aputilsAP;
 	}
-	
+
 	/**
 	 * Get the Network Atomic Predicates
-	 * 
+	 *
 	 * @return the HashMap of Network Atomic Predicates with integer mapping
 	 */
 	public HashMap<Integer, Predicate> getNetworkAtomicPredicates() {
@@ -1643,18 +2248,30 @@ public class VerefooProxy {
 /*****************************************************MF duplicate methods***************************************************************************/
 	/**
 	 * Checks if the service graph satisfies all the imposed conditions
-	 * 
+	 *
 	 * @return
 	 */
 	public VerificationResult checkNFFGPropertyMF() {
+		// FIX: If running in parallel, global check is null. Return the aggregated result.
+		if (this.check == null) {
+			// Using the MF constructor, passing null for the unused model and assertions
+			VerificationResult ret = new VerificationResult(
+					this.ctx,
+					this.sat ? Status.SATISFIABLE : Status.UNSATISFIABLE,
+					this.nctxMF,
+					null,
+					null
+			);
+			ret.time = 0;
+			return ret;
+		}
 		VerificationResult ret = this.check.propertyCheckMF();
 		ret.time = this.check.getTimeChecker();
 		return ret;
 	}
-
 	/**
 	 * Get Net Context
-	 * 
+	 *
 	 * @return the net context
 	 */
 	public NetContextMF getNctxMF() {
@@ -1669,24 +2286,24 @@ public class VerefooProxy {
 		return allocationNodesMF;
 	}
 
-	
+
 	/**
 	 * @return all the requirements
 	 */
 	public Map<Integer, FlowPathMF> getTrafficFlowsMapMF(){
 		return trafficFlowsMapMF;
 	}
-	
+
 	/**
 	 * Get the APUtilsMF
-	 * 
+	 *
 	 * @return the APUtilsMF class Object
 	 */
 	public APUtilsMF getAputilsMF() {
 		return aputilsMF;
 	}
 
-	
+
 	/**
 	 * This method allocates the functions on allocation nodes that are empty specific to Maximal Flows.
 	 * At the moment only packet-filtering capability is allocated, in the future the decision will depend on the type of requirement.
@@ -1701,13 +2318,13 @@ public class VerefooProxy {
 				allocationManager.chooseFunctionsMF(nodes.get(i), source, last);
 			}
 		}
-		
+
 	}
-	
+
 	/**
 	 * This method is recursively called to generate the path of nodes for each requirement specific to Maximal flows.
 	 * @param allPaths it is the list of all the paths that have been computed for the requirement
-	 * @param currentPath it is the current path that the method is building 
+	 * @param currentPath it is the current path that the method is building
 	 * @param source it is the source of the path
 	 * @param destination it is the destination of the path
 	 * @param current it is the current node in the recursive visit
@@ -1716,8 +2333,8 @@ public class VerefooProxy {
 	 * @return true if a path has been identified, false otherwise
 	 */
 	private void recursivePathGenerationMF(List<List<AllocationNodeMF>> allPaths, List<AllocationNodeMF> currentPath, AllocationNodeMF source,
-			AllocationNodeMF destination, AllocationNodeMF current, Set<String> visited, int level) {
-		
+	                                       AllocationNodeMF destination, AllocationNodeMF current, Set<String> visited, int level) {
+
 		currentPath.add(level, current);
 		visited.add(current.getNode().getName());
 		List<Neighbour> listNeighbours = current.getNode().getNeighbour();
@@ -1725,7 +2342,7 @@ public class VerefooProxy {
 			//I save the completed path and search for others
 			List<AllocationNodeMF> pathToStore = new ArrayList<>();
 			for(int i = 0; i < currentPath.size(); i++) {
-				if((currentPath.get(i).getNode().getFunctionalType() == FunctionalTypes.NAT 
+				if((currentPath.get(i).getNode().getFunctionalType() == FunctionalTypes.NAT
 						|| currentPath.get(i).getNode().getFunctionalType() == FunctionalTypes.FIREWALL
 						&& !transformersNode.containsKey(currentPath.get(i).getNode().getName())))
 					transformersNode.put(currentPath.get(i).getNode().getName(), currentPath.get(i).getNode());
@@ -1744,8 +2361,8 @@ public class VerefooProxy {
 				return;
 			}
 		}
-		
-		
+
+
 
 		for(Neighbour n : listNeighbours) {
 			if(!visited.contains(n.getName())) {
@@ -1754,14 +2371,14 @@ public class VerefooProxy {
 				recursivePathGenerationMF(allPaths, currentPath, source, destination, neighbourNode, visited, level);
 				level--;
 			}
-					
+
 		}
-		
+
 		visited.remove(current.getNode().getName());
 		currentPath.remove(level);
 		return;
 	}
-	
+
 	/**
 	 * For each requirement, this method identifies all the possible the paths of nodes that must be crossed by the traffic flows that are related to the requirement specific to Maximal Flows.
 	 * @return the map of all the traffic flows
@@ -1769,13 +2386,13 @@ public class VerefooProxy {
 	private HashMap<Integer, FlowPathMF> generateFlowPathsMF(){
 		HashMap<Integer, FlowPathMF> flowsMap = new HashMap<>();
 		int id = 0;
-		
+
 		for(SecurityRequirement sr : securityRequirements.values()) {
 			Property property = sr.getOriginalProperty();
-			
+
 			//first, this method finds if a forwarding path has been defined by the user for the requirement
 			//in that case, the research is not performed for that specific requirement
-			
+
 			Path definedPath = null;
 			if(paths != null) {
 				for(Path p : paths) {
@@ -1783,11 +2400,11 @@ public class VerefooProxy {
 					String last = p.getPathNode().get(p.getPathNode().size()-1).getName();
 					if(first.equals(property.getSrc()) && last.equals(property.getDst())) {
 						definedPath = p;
-					}	
+					}
 				}
 			}
-			
-			
+
+
 			boolean found = false;
 			List<List<AllocationNodeMF>> allPaths = new ArrayList<>();
 			List<AllocationNodeMF> localPath = new ArrayList<>();
@@ -1809,7 +2426,7 @@ public class VerefooProxy {
 				}
 				allPaths.add(localPath);
 			}
-			
+
 			if(found) {
 				for(List<AllocationNodeMF> singlePath : allPaths) {
 					FlowPathMF flow = new FlowPathMF(sr, singlePath, id);
@@ -1817,17 +2434,17 @@ public class VerefooProxy {
 					sr.getFlowsMapMF().put(id, flow);
 					id++;
 				}
-				
+
 			} else {
 				throw new BadGraphError("There is no path between " + property.getSrc() + " and " + property.getDst(),
 						EType.INVALID_SERVICE_GRAPH);
 			}
-		
+
 		}
-		
-		return flowsMap;	
-	}	
-	
+
+		return flowsMap;
+	}
+
 	/**
 	 * This method generates the NetContext object for the initialization of z3 model.
 	 * @param ctx2 it is the z3 Context object
@@ -1837,7 +2454,7 @@ public class VerefooProxy {
 	 * @return the NetContext object
 	 */
 	private NetContextMF nctxGenerateMF(Context ctx2, List<Node> nodes2, List<Property> prop,
-			HashMap<String, AllocationNodeMF> allocationNodes2) {
+	                                    HashMap<String, AllocationNodeMF> allocationNodes2) {
 		for (Node n : nodes) {
 			if (n.getName().contains("@"))
 				throw new BadGraphError("Invalid node name " + n.getName() + ", it can't contain @",
@@ -1855,40 +2472,40 @@ public class VerefooProxy {
 				.collect(Collectors.toCollection(ArrayList<String>::new)).toArray(dst_portRange);
 		return new NetContextMF(ctx, allocationNodesMF, nodesname, nodesip, src_portRange, dst_portRange);
 	}
-	
-	
+
+
 	/**
 	 * This method creates the hard constraints in the z3 model for reach-ability and isolation requirements.
 	 */
 	private void formalizeRequirementsMF() {
-		
+
 		for(SecurityRequirement sr : securityRequirements.values()) {
 			switch (sr.getOriginalProperty().getName()) {
-			case ISOLATION_PROPERTY:
-				check.createRequirementConstraintsMF(sr, Prop.ISOLATION);
-				break;
-			case REACHABILITY_PROPERTY:
-				check.createRequirementConstraintsMF(sr, Prop.REACHABILITY);
-				break;
-			case COMPLETE_REACHABILITY_PROPERTY:
-				check.createRequirementConstraintsMF(sr, Prop.COMPLETE_REACHABILITY);
-				break;
-			default:
-				throw new BadGraphError("Error in the property definition", EType.INVALID_PROPERTY_DEFINITION);
+				case ISOLATION_PROPERTY:
+					check.createRequirementConstraintsMF(sr, Prop.ISOLATION);
+					break;
+				case REACHABILITY_PROPERTY:
+					check.createRequirementConstraintsMF(sr, Prop.REACHABILITY);
+					break;
+				case COMPLETE_REACHABILITY_PROPERTY:
+					check.createRequirementConstraintsMF(sr, Prop.COMPLETE_REACHABILITY);
+					break;
+				default:
+					throw new BadGraphError("Error in the property definition", EType.INVALID_PROPERTY_DEFINITION);
 			}
-				
+
 		}
-		
+
 	}
-/***************************************************************** Maximal Flows Methods**************************************************************/
-	
- // only for MF method
+	/***************************************************************** Maximal Flows Methods**************************************************************/
+
+	// only for MF method
 	private void fillTrasformersMap() {
 		int nCrossedFirewalls = 0;
 		int counter = 0;
-		
+
 		System.out.println(" ("+transformersNode.size() +" transformers)");
-		
+
 		//For each NAT/FIREWALL found in the paths, compute its input classes
 		for(Node node: transformersNode.values()) {
 			System.out.print("*");
@@ -1906,7 +2523,7 @@ public class VerefooProxy {
 					notSourceNatIPAddressList.add(new IPAddress(ipSrc, true));
 				}
 				notSourceNatIPAddressList.add(new IPAddress(node.getName(), true));
-				
+
 				//compute D1 transformation map
 				List<Predicate> D1List = new ArrayList<>();
 				for(IPAddress privateSrcAddress: sourceNatIPAddressList) {
@@ -1918,12 +2535,12 @@ public class VerefooProxy {
 					D1List.add(newPredicate);
 				}
 				natD1map.put(node.getName(), D1List);
-				
+
 				//compute D2 transformation map
 				Predicate D2Predicate = new Predicate("*", false, node.getName(), false, "*", false, "*", false, L4ProtocolTypes.ANY);
 				D2Predicate.setIPSrcList(notSourceNatIPAddressList);
 				natD2map.put(node.getName(), D2Predicate);
-				
+
 				//compute D31 transformation
 				List<Predicate> D31List = new ArrayList<>();
 				for(IPAddress privateSrcAddress1: sourceNatIPAddressList) {
@@ -1941,7 +2558,7 @@ public class VerefooProxy {
 					}
 				}
 				natD31map.put(node.getName(), D31List);
-				
+
 				//Compute reconverted predicates
 				List<Predicate> reconvertedList = new ArrayList<>();
 				for(IPAddress privateSrcAddress: sourceNatIPAddressList) {
@@ -1953,14 +2570,14 @@ public class VerefooProxy {
 					reconvertedList.add(newPredicate);
 				}
 				natReconvertedMap.put(node.getName(), reconvertedList);
-				
-				
+
+
 				//Compute D32 transformation
 				Predicate D32Predicate = new Predicate("*", false, "*", false, "*", false, "*", false, L4ProtocolTypes.ANY);
 				D32Predicate.setIPSrcList(notSourceNatIPAddressList);
 				D32Predicate.setIPDstList(notSourceNatIPAddressList);
 				natD32map.put(node.getName(), D32Predicate);
-				
+
 				//DEBUG: print all nat transformations
 //				System.out.println("D1 transformations");
 //				for(Predicate p: natD1map.get(node.getName()))
@@ -1977,7 +2594,7 @@ public class VerefooProxy {
 //					p.print();
 //				System.out.println();
 				//END DEBUG
-				
+
 			}
 
 			else if(node.getFunctionalType() == FunctionalTypes.FIREWALL) {
@@ -1988,11 +2605,11 @@ public class VerefooProxy {
 				for(Elements rule: node.getConfiguration().getFirewall().getElements()) {
 					if(rule.getAction().equals(ActionTypes.DENY)) {
 						//deny <--- deny V rule-i
-						deniedList.add(new Predicate(rule.getSource(), false, rule.getDestination(), false, 
+						deniedList.add(new Predicate(rule.getSource(), false, rule.getDestination(), false,
 								rule.getSrcPort(), false, rule.getDstPort(), false, rule.getProtocol()));
 					} else {
 						//allowed <--- allowed V (rule-i AND !denied)
-						Predicate toAdd = new Predicate(rule.getSource(), false, rule.getDestination(), false, 
+						Predicate toAdd = new Predicate(rule.getSource(), false, rule.getDestination(), false,
 								rule.getSrcPort(), false, rule.getDstPort(), false, rule.getProtocol());
 						List<Predicate> allowedToAdd = aputilsMF.computeAllowedForRule(toAdd, deniedList);
 						for(Predicate allow: allowedToAdd) {
@@ -2010,7 +2627,7 @@ public class VerefooProxy {
 							allowedList.add(allow);
 					}
 				}
-				
+
 				//Now we have the allowed list but it contains overlaps -> compute the atomic predicates
 				List<Predicate> atomicPredicates = new ArrayList<>();
 				List<Predicate> predicates = new ArrayList<>();
@@ -2055,9 +2672,9 @@ public class VerefooProxy {
 						}
 					}
 				}
-				
+
 				atomicPredicates = aputilsMF.computeAtomicPredicates(atomicPredicates, predicates);
-				
+
 				List<Predicate> newAllowedList = new ArrayList<>();
 				List<Predicate> newDeniedList = new ArrayList<>();
 				for(Predicate ap: atomicPredicates) {
@@ -2069,12 +2686,12 @@ public class VerefooProxy {
 							break;
 						}
 					}
-					
-					if(found) 
+
+					if(found)
 						newAllowedList.add(ap);
 					else newDeniedList.add(ap);
 				}
-				
+
 				allowedFirewallPredicates.put(node.getName(), newAllowedList);
 				deniedFirewallPredicates.put(node.getName(), newDeniedList);
 
@@ -2108,7 +2725,7 @@ public class VerefooProxy {
 			//System.out.print("*");
 			Property property = flow.getRequirement().getOriginalProperty();
 			String pSrc = property.getSrcPort() != null && !property.getSrcPort().equals("null") ? property.getSrcPort() : "*";
-			
+
 			//Generate source predicate
 			Predicate predicate = new Predicate(property.getSrc(), false, "*", false, pSrc, false, "*", false, L4ProtocolTypes.ANY);
 			List<Predicate> currentMaximalFlow = new ArrayList<>();
@@ -2118,7 +2735,7 @@ public class VerefooProxy {
 				Predicate voidPredicate = new Predicate("*", false, "*", false, "*", false, "*", false, L4ProtocolTypes.ANY);
 				currentMaximalFlow.add(voidPredicate);
 			}
-			
+
 			if(flow.getPath().size() > 1) {
 				recursiveGenerateMaximalFlowsForwardUpdate(1, flow.getRequirement(), flow.getPath(), predicate, flow, currentMaximalFlow, false);
 			} else {
@@ -2134,15 +2751,15 @@ public class VerefooProxy {
 				maximalFlowId++;
 			}
 		}
-		
-		
+
+
 		for(FlowPathMF flow : trafficFlowsMapMF.values()) {
 			List<AllocationNodeMF> path = flow.getPath();
 			for(MaximalFlow maximalFlow: flow.getMaximalFlowsMap().values()) {
 				int index = 0;
 				for(Predicate predicate: maximalFlow.getPredicateList()) {
 					AllocationNodeMF currentNode = path.get(index);
-					
+
 					if(currentNode.getNode().getFunctionalType() == FunctionalTypes.FIREWALL) {
 						//Check if input predicate is dropped or allowed to pass
 						boolean allowed = false;
@@ -2152,17 +2769,17 @@ public class VerefooProxy {
 								break;
 							}
 						}
-						if(allowed) 
+						if(allowed)
 							currentNode.addForwardedPredicate(predicate);
 						else currentNode.addDroppedPredicate(predicate);
 					}
-					
+
 					currentNode.addPredicateInInput(flow.getIdFlow(), maximalFlow.getFlowId(), predicate);
 					index++;
 				}
 			}
 		}
-		
+
 		//DEBUG: print maximal flows
 //		for(FlowPath flow : trafficFlowsMap.values()) {
 //			for(MaximalFlow mf: flow.getMaximalFlowsMap().values()) {
@@ -2175,16 +2792,16 @@ public class VerefooProxy {
 		testResults.setTotalNumberGeneratedFlows(maximalFlowId);
 		System.out.println();
 	}
-	
+
 	private void recursiveGenerateMaximalFlowsForwardUpdate(int nodeIndex, SecurityRequirement sr, List<AllocationNodeMF> path, Predicate inputPredicate,
-			FlowPathMF currentFlowPath, List<Predicate> currentList, boolean somethingChanged) {
-		
+	                                                        FlowPathMF currentFlowPath, List<Predicate> currentList, boolean somethingChanged) {
+
 		if(nodeIndex >= path.size()) {
 			return;
 		}
-		
+
 		AllocationNodeMF node = path.get(nodeIndex);
-		
+
 		if(nodeIndex == path.size() -1) {
 			//We are in the last node of the path
 			//Compute intersection with destination
@@ -2192,7 +2809,7 @@ public class VerefooProxy {
 			L4ProtocolTypes proto = sr.getOriginalProperty().getLv4Proto() != null ? sr.getOriginalProperty().getLv4Proto() : L4ProtocolTypes.ANY;
 			Predicate destPredicate = new Predicate("*", false, node.getIpAddress(), false, "*", false, dstPort, false, proto);
 			Predicate intersectionPredicate = aputilsMF.computeIntersection(destPredicate, inputPredicate);
-			
+
 			if(intersectionPredicate != null) {
 				currentList.set(nodeIndex, intersectionPredicate);
 				//start backward traversal
@@ -2200,7 +2817,7 @@ public class VerefooProxy {
 			}
 			return;
 		}
-		
+
 		if(natD1map.containsKey(node.getIpAddress())) {
 			//Node is a NAT
 			//check if input Predicate has sourceIP == to nat IP
@@ -2216,7 +2833,7 @@ public class VerefooProxy {
 				recursiveGenerateMaximalFlowsForwardUpdate(nodeIndex+1, sr, path, newPredicate, currentFlowPath, currentList, somethingChanged);
 				return;
 			}
-			
+
 			//check if it is a reconverted predicate. In that case forward the input packet saved in this node changing only source
 			boolean isReconverted = false;
 			for(Predicate reconvertedPredicate: natReconvertedMap.get(node.getIpAddress())) {
@@ -2237,7 +2854,7 @@ public class VerefooProxy {
 				recursiveGenerateMaximalFlowsForwardUpdate(nodeIndex+1, sr, path, newPredicate, currentFlowPath, currentList, somethingChanged);
 				return;
 			}
-			
+
 			//Compute intersection with D1
 			for(Predicate D1Predicate: natD1map.get(node.getIpAddress())) {
 				Predicate intersectingD1Predicate = aputilsMF.computeIntersection(D1Predicate, inputPredicate);
@@ -2302,10 +2919,10 @@ public class VerefooProxy {
 			}
 			for(Predicate deniedPredicate: deniedFirewallPredicates.get(node.getIpAddress())) {
 				Predicate intersectionDenied = aputilsMF.computeIntersection(deniedPredicate, inputPredicate);
-				if(intersectionDenied != null && !aputilsMF.APCompare(intersectionDenied, inputPredicate)) 
+				if(intersectionDenied != null && !aputilsMF.APCompare(intersectionDenied, inputPredicate))
 					trasformedPredicates.add(intersectionDenied);
 			}
-			
+
 			//Generate the new flows
 			if(trasformedPredicates.size() > 0) {
 				for(Predicate newPredicate:trasformedPredicates) {
@@ -2313,7 +2930,7 @@ public class VerefooProxy {
 					newCurrentList.set(nodeIndex, newPredicate);
 					//continue recursion without transformation
 					recursiveGenerateMaximalFlowsForwardUpdate(nodeIndex+1, sr, path, newPredicate, currentFlowPath, newCurrentList, somethingChanged);
-				
+
 				}
 			} else {
 				//simply forward the packet
@@ -2329,13 +2946,13 @@ public class VerefooProxy {
 	}
 
 	private void recursiveGenerateMaximalFlowsBackwardUpdate(int nodeIndex, SecurityRequirement sr, List<AllocationNodeMF> path, Predicate inputPredicate,
-			FlowPathMF currentFlowPath, List<Predicate> currentList, boolean somethingChanged) {
-		
+	                                                         FlowPathMF currentFlowPath, List<Predicate> currentList, boolean somethingChanged) {
+
 		if(nodeIndex < 0)
 			return;
-		
+
 		AllocationNodeMF node = path.get(nodeIndex);
-		
+
 		if(nodeIndex == 0) {
 			//We are in the last first node of the path
 			Predicate newPredicate = new Predicate(inputPredicate);
@@ -2350,7 +2967,7 @@ public class VerefooProxy {
 
 			return;
 		}
-		
+
 		if(natD1map.containsKey(node.getIpAddress())) {
 			//Node is a NAT
 			//check if input Predicate has sourceIP == to nat IP
@@ -2366,7 +2983,7 @@ public class VerefooProxy {
 				recursiveGenerateMaximalFlowsBackwardUpdate(nodeIndex-1, sr, path, newPredicate, currentFlowPath, currentList, somethingChanged);
 				return;
 			}
-			
+
 			//check if it is a reconverted predicate. In that case forward the input packet saved in this node changing only source
 			boolean isReconverted = false;
 			for(Predicate reconvertedPredicate: natReconvertedMap.get(node.getIpAddress())) {
@@ -2377,7 +2994,7 @@ public class VerefooProxy {
 					}
 				}
 			}
-			
+
 			if(isReconverted) {
 				Predicate newPredicate = new Predicate(currentList.get(nodeIndex));
 				newPredicate.setIPSrcList(inputPredicate.getIPSrcList());
@@ -2387,7 +3004,7 @@ public class VerefooProxy {
 				recursiveGenerateMaximalFlowsBackwardUpdate(nodeIndex-1, sr, path, newPredicate, currentFlowPath, currentList, somethingChanged);
 				return;
 			}
-			
+
 			//Compute intersection with D1
 			for(Predicate D1Predicate: natD1map.get(node.getIpAddress())) {
 				Predicate intersectingD1Predicate = aputilsMF.computeIntersection(D1Predicate, inputPredicate);
@@ -2448,15 +3065,15 @@ public class VerefooProxy {
 			List<Predicate> trasformedPredicates = new ArrayList<>();
 			for(Predicate allowedPredicate: allowedFirewallPredicates.get(node.getIpAddress())) {
 				Predicate intersectionAllowed = aputilsMF.computeIntersection(allowedPredicate, inputPredicate);
-				if(intersectionAllowed != null && !aputilsMF.APCompare(intersectionAllowed, inputPredicate)) 
+				if(intersectionAllowed != null && !aputilsMF.APCompare(intersectionAllowed, inputPredicate))
 					trasformedPredicates.add(intersectionAllowed);
 			}
 			for(Predicate deniedPredicate: deniedFirewallPredicates.get(node.getIpAddress())) {
 				Predicate intersectionDenied = aputilsMF.computeIntersection(deniedPredicate, inputPredicate);
-				if(intersectionDenied != null && !aputilsMF.APCompare(intersectionDenied, inputPredicate)) 
+				if(intersectionDenied != null && !aputilsMF.APCompare(intersectionDenied, inputPredicate))
 					trasformedPredicates.add(intersectionDenied);
 			}
-			
+
 			//Generate the new flows
 			if(trasformedPredicates.size() > 0) {
 				for(Predicate newPredicate:trasformedPredicates) {

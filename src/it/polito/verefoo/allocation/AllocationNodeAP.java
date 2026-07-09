@@ -89,7 +89,11 @@ public class AllocationNodeAP extends AllocationNode {
 	public HashMap<Integer, List<Integer>> getTransformationMap(){
 		return transformationsMap;
 	}
-	
+
+	public void setTrasformationMap(HashMap<Integer, List<Integer>> trasformationMap) {
+		this.transformationsMap = trasformationMap;
+	}
+
 	/**
 	 * Setter method for the forward behavior predicate list of this node
 	 * @param list of predicates.
@@ -178,6 +182,36 @@ public class AllocationNodeAP extends AllocationNode {
 	public void setMapFlowIdAtomicPredicatesInInput(Map<Integer, Map<Integer, Integer>> mapFlowIdAtomicPredicatesInInput) {
 		this.mapFlowIdAtomicPredicatesInInput = mapFlowIdAtomicPredicatesInInput;
 	}
-	
-	
+
+	public AllocationNodeAP clone() {
+		AllocationNodeAP an = new AllocationNodeAP(cloneNode(node));
+		an.setDroppedList(droppedList);
+		an.setForwardBehaviourList(forwardBehaviourList);
+		an.setForwardBehaviourPredicateList(forwardBehaviourPredicateList);
+		an.setMapFlowIdAtomicPredicatesInInput(mapFlowIdAtomicPredicatesInInput);
+		an.setIpAddress(ipAddress);
+		an.setFlows(new HashMap<Integer, FlowPathAP>());
+		an.setTrasformationMap(transformationsMap);
+
+		return an;
+	}
+
+	private Neighbour cloneNeighbour(Neighbour ne) {
+		Neighbour n = new Neighbour();
+		n.setId(ne.getId());
+		n.setName(ne.getName());
+		return n;
+	}
+
+	private Node cloneNode(Node node) {
+		Node n = new Node();
+		n.setConfiguration(node.getConfiguration());
+		n.setFunctionalType(node.getFunctionalType());
+		n.setId(node.getId());
+		n.setName(node.getName());
+		for (Neighbour ne : node.getNeighbour())
+			n.getNeighbour().add(cloneNeighbour(ne));
+
+		return n;
+	}
 }

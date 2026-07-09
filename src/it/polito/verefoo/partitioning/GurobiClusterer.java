@@ -29,6 +29,10 @@ public class GurobiClusterer {
     private static String LAST_CLUSTER_NODE_COUNTS = "";
     private static String LAST_CLUSTER_FLOW_COUNTS = "";
     private static String LAST_CLUSTER_AP_COUNTS = "";
+    // Node -> assigned cluster id for the most recent solve_ILP() run.
+    // Populated inside solve_ILP() (before the model/env are disposed) so it can be
+    // handed to ClustersGenerator to build the actual VEREFOO subnetworks.
+    private static Map<Node, Integer> LAST_CLUSTER_ASSIGNMENT = new HashMap<>();
     private static int totalAp = 0;
     // Public constants so VerefooProxy can use them to calculate the weight of the edges
     /*
@@ -156,10 +160,8 @@ public class GurobiClusterer {
         // Default (-1) lets Gurobi choose, often picking 'Concurrent' (running all algorithms at once).
         // Setting it to '2' forces the Barrier method, which is generally faster and more predictable for large, sparse network graphs.
         env.set(GRB.IntParam.Method, 2);
+        env.set(GRB.DoubleParam.TimeLimit, 600.0);
 
-        //env.set(GRB.IntParam.BarIterLimit, 200); // cap Barrier iterations
-        //env.set(GRB.DoubleParam.NodeLimit, 5.0);
-        env.set(GRB.DoubleParam.TimeLimit, 60.0); // move here, on env
 
         env.start();
         //env.set(GRB.DoubleParam.MIPGap, 0.05); // Stops when it reaches 95% of the absolute optimum
@@ -172,8 +174,7 @@ public class GurobiClusterer {
         // if the parameter controls how Gurobi thinks, set it on env. If it controls when Gurobi stops, set it on model
         try {
             model = new GRBModel(env);
-            model.set(GRB.DoubleParam.TimeLimit, 60.0);
-            //model.set(GRB.DoubleParam.NodeLimit, 30.0); // hard cap on B&B nodes
+            model.set(GRB.DoubleParam.TimeLimit, 600.0);
 
             int numEdges = edges.size();
 
@@ -346,6 +347,7 @@ public class GurobiClusterer {
                 List<Integer> nodeCounts = new java.util.ArrayList<>();
                 List<Integer> flowCounts = new java.util.ArrayList<>();
                 List<Integer> apCounts = new java.util.ArrayList<>();
+                LAST_CLUSTER_ASSIGNMENT = new HashMap<>();
 
                 for (int k = 0; k < K_max; k++) {
                     // If cluster k is active (A[k] == 1)
@@ -367,6 +369,7 @@ public class GurobiClusterer {
                                 // Sum the flow load for this node
                                 Node n = nodes.get(i);
                                 loadInCluster += nodeLoads.getOrDefault(n, 0);
+                                LAST_CLUSTER_ASSIGNMENT.put(n, k);
                             }
                         }
 
@@ -417,6 +420,10 @@ public class GurobiClusterer {
     public static String getLastClusterFlowCounts() { return LAST_CLUSTER_FLOW_COUNTS; }
     public static String getLastClusterApCounts() { return LAST_CLUSTER_AP_COUNTS; }
 
+    // Node -> cluster id map for the most recent solve. This is the entry point
+    // ClustersGenerator uses instead of running Leiden and parsing its clusters.txt.
+    public static Map<Node, Integer> getLastClusterAssignment() { return LAST_CLUSTER_ASSIGNMENT; }
+
     // Getter for testing purpose
     public static Boolean getStopAfterGurobi() { return stop_test; }
 
@@ -428,4 +435,7 @@ public class GurobiClusterer {
         LAST_CLUSTER_FLOW_COUNTS = "";
         LAST_CLUSTER_AP_COUNTS = "";
     }
+
 }
+
+

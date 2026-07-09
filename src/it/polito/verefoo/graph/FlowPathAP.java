@@ -1,4 +1,5 @@
 package it.polito.verefoo.graph;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -8,29 +9,29 @@ import it.polito.verefoo.allocation.AllocationNodeMF;
 import it.polito.verefoo.jaxb.*;
 
 /** Represents a Flow Path specific for Atomic Predicates.
-*
-*
-*/
+ *
+ *
+ */
 public class FlowPathAP {
-	
+
 	SecurityRequirement requirement;
 	int idFlow;
 	private List<AllocationNodeAP> path;
 	//<id of atomic flow, atomic flow>
 	Map<Integer, AtomicFlow> atomicFlowsMap = new HashMap<>();
 	Map<Integer, AtomicFlow> atomicFlowsToDiscardMap = new HashMap<>();
-	
+
 	/**
-    * Public constructor of Flow Path specific to Atomic Predicates.
-    * @param requirement
-    * @param path
-    * @param idFlow
-    */
+	 * Public constructor of Flow Path specific to Atomic Predicates.
+	 * @param requirement
+	 * @param path
+	 * @param idFlow
+	 */
 	public FlowPathAP(SecurityRequirement requirement, List<AllocationNodeAP> path, int idFlow) {
 		this.requirement = requirement;
 		this.path = path;
 		this.idFlow = idFlow;
-		
+
 		for(AllocationNodeAP node: path) {
 			node.addCrossingFlow(this);
 		}
@@ -65,25 +66,44 @@ public class FlowPathAP {
 	public void setPath(List<AllocationNodeAP> path) {
 		this.path = path;
 	}
-	
+
 	public void addAtomicFlow(int id, List<Integer> atomicFlow) {
 		AtomicFlow newFlow = new AtomicFlow(id, this, atomicFlow);
 		atomicFlowsMap.put(id, newFlow);
 	}
-	
+
 	public void addAtomicFlowToDiscard(int id, List<Integer> atomicFlow) {
 		AtomicFlow newFlow = new AtomicFlow(id, this, atomicFlow);
 		atomicFlowsToDiscardMap.put(id, newFlow);
-		
+
 	}
 
 	public Map<Integer, AtomicFlow> getAtomicFlowsMap() {
 		return atomicFlowsMap;
 	}
 
+	public void setAtomicFlowMap(Map<Integer, AtomicFlow> atomicFlowMap) {
+		this.atomicFlowsMap = atomicFlowMap;
+	}
+
 	public Map<Integer, AtomicFlow> getAtomicFlowsToDiscardMap() {
 		return atomicFlowsToDiscardMap;
 	}
-	
-	
+
+	public void setAtomicFlowMapToDiscard(Map<Integer, AtomicFlow> atomicFlowMapToDiscard) {
+		this.atomicFlowsToDiscardMap = atomicFlowMapToDiscard;
+	}
+
+	public FlowPathAP clone() {
+		FlowPathAP f = new FlowPathAP(requirement, path, idFlow);
+		f.setAtomicFlowMap(atomicFlowsMap);
+		f.setAtomicFlowMapToDiscard(atomicFlowsToDiscardMap);
+		List<AllocationNodeAP> newPath = new ArrayList<>();
+		for (AllocationNodeAP n : path)
+			newPath.add(n.clone());
+
+		return f;
+	}
+
+
 }
