@@ -137,7 +137,7 @@ public class TestCasesController {
 	
 	private NFV testCoarse(NFV root,String alg) throws Exception{
 		long beginAll=System.currentTimeMillis();
-		VerefooSerializer test = new VerefooSerializer(root,alg);
+		VerefooSerializer test = new VerefooSerializer(root,alg,false);
 		
 		long endAll=System.currentTimeMillis();
 		 if(test.isSat()){

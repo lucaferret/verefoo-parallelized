@@ -132,6 +132,8 @@ public class VerefooProxy {
 			//Creation of the z3 context
 			HashMap<String, String> cfg = new HashMap<String, String>();
 			cfg.put("model", "true");
+
+			cfg.put("timeout", "1200000"); // timeout in milliseconds
 			ctx = new Context(cfg);
 
 			//Creation of the NetContext (z3 variables)
@@ -216,7 +218,9 @@ public class VerefooProxy {
 
 				GurobiClusterer clustererAP = new GurobiClusterer(nodes, edgesList, nodeLoads);
 				try {
+					long startGurobi = System.currentTimeMillis();
 					clustererAP.solve_ILP();
+					testResults.setGurobiTime(System.currentTimeMillis() - startGurobi); // Save time
 				} catch (Exception e) {
 					System.err.println("Error during ILP Clustering execution:");
 					e.printStackTrace();
@@ -236,6 +240,7 @@ public class VerefooProxy {
 				int MAX_RETRIES = 3;
 				for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
 					this.sat = true; // Reset SAT for this attempt
+					this.cutOffFlowIdsAP = new HashSet<>();  // clear stale cut flow IDs from previous attempt
 
 					if (attempt > 0) {
 						System.out.println("\n>>> Attempt " + attempt + " failed (UNSAT). Retrying with shifted cutoff assignments...");
@@ -245,6 +250,7 @@ public class VerefooProxy {
 							new HashSet<>(nodes), securityRequirements, networkAtomicPredicates, gurobiAssignment, attempt);
 
 					Map<Integer, Set<AllocationNodeAP>> subnetworks = clustersGenerator.getSubNetworksAP();
+					testResults.setNumberOfClusters(subnetworks.size()); // Save cluster count
 					Map<Integer, Set<FlowPathAP>> flowsPerSubnetwork = clustersGenerator.getFlowsPerSubnetworkAP();
 					Map<Integer, Set<SecurityRequirement>> reqsPerSubnetwork = clustersGenerator.getReqsPerSubnetworkAP();
 					Map<Integer, Set<Property>> propsPerSubnetwork = clustersGenerator.getPropsPerSubnetwork();
@@ -281,32 +287,58 @@ public class VerefooProxy {
 					List<GurobiResult> GurobiResults = new ArrayList<>();
 					List<NFV> nfvResults = new ArrayList<>();
 
+					long startSMT = System.currentTimeMillis();
+
 					for (Future<GurobiResult> f : futures) {
 						try {
-							GurobiResult r = f.get();
+							GurobiResult r = f.get(300, java.util.concurrent.TimeUnit.SECONDS);
 							if (r == null || r.getNFV() == null) {
 								this.sat = false;
 							} else {
 								GurobiResults.add(r);
 								nfvResults.add(r.getNFV());
 							}
+						} catch(java.util.concurrent.TimeoutException e) {
+							f.cancel(true); // interrupt the thread; native Z3 won't stop but Java unblocks
+							this.sat = false;
+							System.err.println("[COORDINATOR] Cluster task timed out after 300s. Marking attempt as failed.");
 						} catch (InterruptedException | ExecutionException e) {
+							f.cancel(true);
+							this.sat = false;
 							e.printStackTrace();
+							break;
 						}
 					}
-					subnetworkExecutor.shutdown();
+
+					for (Future<GurobiResult> pendingTask : futures) { // use futuresMF for the MF block
+						if (!pendingTask.isDone()) {
+							pendingTask.cancel(true);
+						}
+					}
+					long endSMT = System.currentTimeMillis();
+					testResults.setClusteredSMTTime(endSMT - startSMT);
+
+					subnetworkExecutor.shutdownNow();
 
 					// If SAT is true, the attempt succeeded! Merge and break the loop.
 					if (this.sat && !nfvResults.isEmpty()) {
+						long t_1 = System.currentTimeMillis();
+						testResults.setStartMergeTime(t_1);
+						System.out.println("[COORDINATOR] mergeResults starting...");
 						NFV finalResult = mergeResults(nfvResults, "AP");
+						System.out.println("[COORDINATOR] mergeResults done. optimizeDuplicateFirewalls starting...");
 						optimizeDuplicateFirewalls(finalResult, "AP");
+						System.out.println("[COORDINATOR] optimizeDuplicateFirewalls done. addOtherNodes starting...");
+						long t_2 = System.currentTimeMillis();
+						testResults.setEndMergeTime(t_2);
 						mergedNFV = finalResult;
 
 						try {
 							addOtherNodes(finalResult, new HashSet<>(nodes));
-							computeOptimality(finalResult);
+							//computeOptimality(finalResult);
 						} catch (Exception e) {
 							e.printStackTrace();
+							break;
 						}
 
 						break; // <--- BREAK THE LOOP, WE ARE DONE!
@@ -346,6 +378,8 @@ public class VerefooProxy {
 			//Creation of the z3 context
 			HashMap<String, String> cfg = new HashMap<String, String>();
 			cfg.put("model", "true");
+
+			cfg.put("timeout", "1200000"); // timeout in milliseconds
 			ctx = new Context(cfg);
 
 			//Creation of the NetContext (z3 variables)
@@ -428,7 +462,9 @@ public class VerefooProxy {
 
 				GurobiClusterer clustererMF = new GurobiClusterer(nodes, edgesList, nodeLoads);
 				try {
+					long startGurobi = System.currentTimeMillis();
 					clustererMF.solve_ILP();
+					testResults.setGurobiTime(System.currentTimeMillis() - startGurobi); // Save time
 				} catch (Exception e) {
 					System.err.println("Error during ILP Clustering execution:");
 					e.printStackTrace();
@@ -446,6 +482,7 @@ public class VerefooProxy {
 				int MAX_RETRIES = 3;
 				for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
 					this.sat = true; // Reset SAT for this attempt
+					this.cutOffFlowIdsAP = new HashSet<>();  // ADD THIS LINE
 
 					if (attempt > 0) {
 						System.out.println("\n>>> Attempt " + attempt + " failed (UNSAT). Retrying with shifted cutoff assignments...");
@@ -455,6 +492,7 @@ public class VerefooProxy {
 							new HashSet<>(nodes), securityRequirements, gurobiAssignmentMF, attempt); // <-- Pass attempt
 
 					Map<Integer, Set<AllocationNodeMF>> subnetworksMF = clustersGeneratorMF.getSubNetworksMF();
+					testResults.setNumberOfClusters(subnetworksMF.size()); // Save cluster count
 					Map<Integer, Set<FlowPathMF>> flowsPerSubnetworkMF = clustersGeneratorMF.getFlowsPerSubnetworkMF();
 					Map<Integer, Set<SecurityRequirement>> reqsPerSubnetworkMF = clustersGeneratorMF.getReqsPerSubnetworkMF();
 					Map<Integer, Set<Property>> propsPerSubnetworkMF = clustersGeneratorMF.getPropsPerSubnetwork();
@@ -490,30 +528,55 @@ public class VerefooProxy {
 					List<GurobiResult> GurobiResultsMF = new ArrayList<>();
 					List<NFV> nfvResults = new ArrayList<>();
 
+					long startSMT = System.currentTimeMillis();
+
 					for (Future<GurobiResult> f : futuresMF) {
 						try {
-							GurobiResult r = f.get();
+							GurobiResult r = f.get(300, java.util.concurrent.TimeUnit.SECONDS);
 							if (r == null || r.getNFV() == null) {
 								this.sat = false;
 							} else {
 								GurobiResultsMF.add(r);
 								nfvResults.add(r.getNFV());
 							}
+						} catch(java.util.concurrent.TimeoutException e) {
+							f.cancel(true); // interrupt the thread; native Z3 won't stop but Java unblocks
+							this.sat = false;
+							System.err.println("[COORDINATOR] Cluster task timed out after 300s. Marking attempt as failed.");
 						} catch (InterruptedException | ExecutionException e) {
+							f.cancel(true);
+							this.sat = false;
 							e.printStackTrace();
+							break;
 						}
 					}
-					subnetworkExecutorMF.shutdown();
+
+					for (Future<GurobiResult> pendingTask : futuresMF) { // use futuresMF for the MF block
+						if (!pendingTask.isDone()) {
+							pendingTask.cancel(true);
+						}
+					}
+
+					long endSMT = System.currentTimeMillis();
+					testResults.setClusteredSMTTime(endSMT - startSMT);
+
+					subnetworkExecutorMF.shutdownNow();
 
 					// If SAT is true, the attempt succeeded! Merge and break the loop.
 					if (this.sat && !nfvResults.isEmpty()) {
+						long t1 = System.currentTimeMillis();
+						testResults.setStartMergeTime(t1);
+
 						NFV finalResult = mergeResults(nfvResults, "MF");
 						optimizeDuplicateFirewalls(finalResult, "MF");
+
+						long t2 = System.currentTimeMillis();
+						testResults.setEndMergeTime(t2);
 						mergedNFV = finalResult;
 
 						try {
 							addOtherNodes(finalResult, new HashSet<>(nodes));
-							computeOptimality(finalResult);
+							//computeOptimality(finalResult);
 						} catch (Exception e) {
 							e.printStackTrace();
 						}
@@ -598,6 +661,8 @@ public class VerefooProxy {
 			//Creation of the z3 context
 			HashMap<String, String> cfg = new HashMap<String, String>();
 			cfg.put("model", "true");
+
+			cfg.put("timeout", "1200000"); // timeout in milliseconds
 			ctx = new Context(cfg);
 
 			//Creation of the NetContext (z3 variables)
@@ -688,15 +753,26 @@ public class VerefooProxy {
 	public void computeOptimality(NFV root) {  // this method prints the number of firewalls and average number of rules per firewall
 		List<Node> nodes = root.getGraphs().getGraph().get(0).getNode();
 		int numberOfFirewalls = 0;
-		double numberOfRules = 0.0;
+		int totalRules = 0;
 		for (Node n : nodes) {
 			if (n.getFunctionalType() != null && n.getFunctionalType().value().equals("FIREWALL")) {
 				numberOfFirewalls++;
-				numberOfRules += (double) n.getConfiguration().getFirewall().getElements().size();
+				totalRules += n.getConfiguration().getFirewall().getElements().size();
 			}
 		}
-		this.optimality = "Number of firewalls: " + numberOfFirewalls + ", average number of rules: " + (numberOfRules/numberOfFirewalls);
-		System.out.println("Number of firewalls: " + numberOfFirewalls + ", average number of rules: " + (numberOfRules/numberOfFirewalls));
+
+		double avgRules = numberOfFirewalls > 0 ? ((double) totalRules / numberOfFirewalls) : 0.0;
+
+		// Capture the exact number of Allocation Places (APs) the algorithm had to evaluate
+		//numAPs = AlgoUsed.equals("AP") ? allocationNodesAP.size() : allocationNodesMF.size();
+
+		this.optimality = "Number of firewalls: " + numberOfFirewalls + ", total rules: " + totalRules;
+		System.out.println(this.optimality);
+
+		this.testResults.setAllocatedFirewalls(numberOfFirewalls);
+		this.testResults.setTotalRules(totalRules);
+		this.testResults.setAverageRules(avgRules);
+		//this.testResults.setAllocationPlaces(numAPs);
 	}
 
 	private NFV mergeResults(List<NFV> results, String algo) {
@@ -859,32 +935,68 @@ public class VerefooProxy {
 		if (cutOffFlowIdsAP.isEmpty()) {
 			return;
 		}
+
 		List<Node> finalNodes = finalResult.getGraphs().getGraph().get(0).getNode();
-		List<AtomicFlow> cutIsolationFlows = new ArrayList<>();
+
+		// OPTIMIZATION 1: O(1) Node Lookup Map to eliminate findNodeByName bottleneck
+		Map<String, Node> nodeMap = new HashMap<>();
+		for (Node n : finalNodes) {
+			nodeMap.put(n.getName(), n);
+		}
+
+		// Precompute: node name -> all isolation atomic flows crossing it.
+		Map<String, List<AtomicFlow>> isolationFlowsByNode = new HashMap<>();
+		for (FlowPathAP flowPath : trafficFlowsMapAP.values()) {
+			if (flowPath.getRequirement().getOriginalProperty().getName() != PName.ISOLATION_PROPERTY) {
+				continue;
+			}
+			for (AllocationNodeAP pathNode : flowPath.getPath()) {
+				String nodeName = pathNode.getIpAddress();
+				isolationFlowsByNode
+						.computeIfAbsent(nodeName, k -> new ArrayList<>())
+						.addAll(flowPath.getAtomicFlowsMap().values());
+			}
+		}
+
+		// OPTIMIZATION 2: Collect UNIQUE candidate firewalls across all cut flows
+		// This ensures we evaluate each firewall exactly once, no matter how many flows cross it.
+		Set<String> uniqueCandidateFirewalls = new HashSet<>();
 		for (FlowPathAP flowPath : trafficFlowsMapAP.values()) {
 			if (!cutOffFlowIdsAP.contains(flowPath.getIdFlow())
 					|| flowPath.getRequirement().getOriginalProperty().getName() != PName.ISOLATION_PROPERTY) {
 				continue;
 			}
-			cutIsolationFlows.addAll(flowPath.getAtomicFlowsMap().values());
-		}
-		for (AtomicFlow cutFlow : cutIsolationFlows) {
-			List<String> candidateFirewalls = getAllocatedFirewallsOnAtomicFlow(cutFlow, finalNodes);
-			for (String firewallName : candidateFirewalls) {
-				Node firewall = findNodeByName(finalNodes, firewallName);
-				if (!isAllocatedFirewall(firewall)) {
-					continue;
-				}
-				boolean removable = true;
-				for (AtomicFlow isolationFlow : getIsolationAtomicFlowsCrossingNode(firewallName)) {
-					if (!hasAlternativeDenyingFirewall(isolationFlow, firewallName, finalNodes)) {
-						removable = false;
-						break;
+
+			for (AtomicFlow cutFlow : flowPath.getAtomicFlowsMap().values()) {
+				for (AllocationNodeAP pathNode : cutFlow.getFlowPathAP().getPath()) {
+					Node finalNode = nodeMap.get(pathNode.getIpAddress());
+					if (isAllocatedFirewall(finalNode)) {
+						uniqueCandidateFirewalls.add(pathNode.getIpAddress());
 					}
 				}
-				if (removable) {
-					deallocateFirewall(firewall);
+			}
+		}
+
+		// OPTIMIZATION 3: Evaluate each unique candidate firewall
+		for (String firewallName : uniqueCandidateFirewalls) {
+			Node firewall = nodeMap.get(firewallName);
+			if (!isAllocatedFirewall(firewall)) {
+				continue;
+			}
+
+			List<AtomicFlow> crossingFlows = isolationFlowsByNode
+					.getOrDefault(firewallName, Collections.emptyList());
+
+			boolean removable = true;
+			for (AtomicFlow isolationFlow : crossingFlows) {
+				// Note: Calling the optimized helper method here
+				if (!hasAlternativeDenyingFirewallFast(isolationFlow, firewallName, nodeMap)) {
+					removable = false;
+					break;
 				}
+			}
+			if (removable) {
+				deallocateFirewall(firewall);
 			}
 		}
 	}
@@ -893,34 +1005,111 @@ public class VerefooProxy {
 		if (cutOffFlowIdsMF.isEmpty()) {
 			return;
 		}
+
 		List<Node> finalNodes = finalResult.getGraphs().getGraph().get(0).getNode();
-		List<MaximalFlow> cutIsolationFlows = new ArrayList<>();
+
+		// OPTIMIZATION 1: O(1) Node Lookup Map to eliminate findNodeByName bottleneck
+		Map<String, Node> nodeMap = new HashMap<>();
+		for (Node n : finalNodes) {
+			nodeMap.put(n.getName(), n);
+		}
+
+		// Precompute: node name -> all isolation maximal flows crossing it.
+		Map<String, List<MaximalFlow>> isolationFlowsByNode = new HashMap<>();
+		for (FlowPathMF flowPath : trafficFlowsMapMF.values()) {
+			if (flowPath.getRequirement().getOriginalProperty().getName() != PName.ISOLATION_PROPERTY) {
+				continue;
+			}
+			for (AllocationNodeMF pathNode : flowPath.getPath()) {
+				String nodeName = pathNode.getIpAddress();
+				isolationFlowsByNode
+						.computeIfAbsent(nodeName, k -> new ArrayList<>())
+						.addAll(flowPath.getMaximalFlowsMap().values());
+			}
+		}
+
+		// OPTIMIZATION 2: Collect UNIQUE candidate firewalls across all cut flows
+		Set<String> uniqueCandidateFirewalls = new HashSet<>();
 		for (FlowPathMF flowPath : trafficFlowsMapMF.values()) {
 			if (!cutOffFlowIdsMF.contains(flowPath.getIdFlow())
 					|| flowPath.getRequirement().getOriginalProperty().getName() != PName.ISOLATION_PROPERTY) {
 				continue;
 			}
-			cutIsolationFlows.addAll(flowPath.getMaximalFlowsMap().values());
-		}
-		for (MaximalFlow cutFlow : cutIsolationFlows) {
-			List<String> candidateFirewalls = getAllocatedFirewallsOnMaximalFlow(cutFlow, finalNodes);
-			for (String firewallName : candidateFirewalls) {
-				Node firewall = findNodeByName(finalNodes, firewallName);
-				if (!isAllocatedFirewall(firewall)) {
-					continue;
-				}
-				boolean removable = true;
-				for (MaximalFlow isolationFlow : getIsolationMaximalFlowsCrossingNode(firewallName)) {
-					if (!hasAlternativeDenyingFirewall(isolationFlow, firewallName, finalNodes)) {
-						removable = false;
-						break;
+
+			for (MaximalFlow cutFlow : flowPath.getMaximalFlowsMap().values()) {
+				// Iterate the path to find allocated firewalls
+				for (AllocationNodeMF pathNode : cutFlow.getFlowPath().getPath()) {
+					Node finalNode = nodeMap.get(pathNode.getIpAddress());
+					if (isAllocatedFirewall(finalNode)) {
+						uniqueCandidateFirewalls.add(pathNode.getIpAddress());
 					}
-				}
-				if (removable) {
-					deallocateFirewall(firewall);
 				}
 			}
 		}
+
+		// OPTIMIZATION 3: Evaluate each unique candidate firewall exactly once
+		for (String firewallName : uniqueCandidateFirewalls) {
+			Node firewall = nodeMap.get(firewallName);
+			if (!isAllocatedFirewall(firewall)) {
+				continue;
+			}
+
+			List<MaximalFlow> crossingFlows = isolationFlowsByNode
+					.getOrDefault(firewallName, Collections.emptyList());
+
+			boolean removable = true;
+			for (MaximalFlow isolationFlow : crossingFlows) {
+				// Note: Calling the optimized fast helper method here
+				if (!hasAlternativeDenyingFirewallFastMF(isolationFlow, firewallName, nodeMap)) {
+					removable = false;
+					break;
+				}
+			}
+			if (removable) {
+				deallocateFirewall(firewall);
+			}
+		}
+	}
+
+	private boolean hasAlternativeDenyingFirewallFast(AtomicFlow flow, String excludedFirewall, Map<String, Node> nodeMap) {
+		List<AllocationNodeAP> path = flow.getFlowPathAP().getPath();
+		List<Integer> atomicPredicates = flow.getAtomicPredicateList();
+
+		for (int i = 1; i < path.size(); i++) {
+			String nodeName = path.get(i).getIpAddress();
+			if (nodeName.equals(excludedFirewall)) {
+				continue;
+			}
+
+			// O(1) lookup instead of findNodeByName
+			Node firewall = nodeMap.get(nodeName);
+
+			if (isAllocatedFirewall(firewall) && firewallDeniesPredicate(firewall, networkAtomicPredicates.get(atomicPredicates.get(i - 1)))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private boolean hasAlternativeDenyingFirewallFastMF(MaximalFlow flow, String excludedFirewall, Map<String, Node> nodeMap) {
+		List<AllocationNodeMF> path = flow.getFlowPath().getPath();
+		List<Predicate> predicates = flow.getPredicateList();
+
+		// MF paths iterate from 0 to path.size()
+		for (int i = 0; i < path.size(); i++) {
+			String nodeName = path.get(i).getIpAddress();
+			if (nodeName.equals(excludedFirewall)) {
+				continue;
+			}
+
+			// O(1) lookup instead of findNodeByName
+			Node firewall = nodeMap.get(nodeName);
+
+			if (isAllocatedFirewall(firewall) && firewallDeniesPredicate(firewall, predicates.get(i))) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private List<AtomicFlow> getIsolationAtomicFlowsCrossingNode(String nodeName) {
@@ -1113,7 +1302,6 @@ public class VerefooProxy {
 			tasks.add(threadPool.submit(new GenerateFlowsTask(sr, networkAtomicPredicates, aputilsNew, transformersNode, atomicId)));
 		}
 
-		threadPool.shutdown();
 		//Join results
 		for(Future<?> fut: tasks) {
 			try {
@@ -1122,7 +1310,8 @@ public class VerefooProxy {
 				e.printStackTrace();
 			}
 		}
-		System.out.println();
+		threadPool.shutdown();
+
 
 	/*	//DEBUG: print atomic flows for each requirement
 		for(SecurityRequirement sr : securityRequirements.values()) {

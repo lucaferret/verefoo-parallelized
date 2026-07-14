@@ -192,7 +192,7 @@ public class TestPerformanceScalabilityMaximalFlows {
 
 	private static NFV testCoarse(NFV root) throws Exception{
 		long beginAll=System.currentTimeMillis();
-		VerefooSerializer test = new VerefooSerializer(root,algo);
+		VerefooSerializer test = new VerefooSerializer(root,algo,false);
 		long endAll=System.currentTimeMillis();
 		TestResults results = test.getTestTimeResults();
 		

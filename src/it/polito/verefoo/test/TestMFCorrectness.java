@@ -80,7 +80,7 @@ public class TestMFCorrectness {
         u.setSchema(schema);
         NFV root = (NFV) u.unmarshal( new FileInputStream( file ) );
         
-		VerefooSerializer test = new VerefooSerializer(root,"MF");
+		VerefooSerializer test = new VerefooSerializer(root,"MF",false);
         
         
         if(test.isSat()){

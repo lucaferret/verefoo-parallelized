@@ -122,7 +122,7 @@ public class TestPerformanceScalabilityAtomicPredicatesVerigraphAP {
 
 	private static NFV testCoarse(NFV root) throws Exception{
 		long beginAll=System.currentTimeMillis();
-		VerefooSerializer test = new VerefooSerializer(root,algo); // only AP
+		VerefooSerializer test = new VerefooSerializer(root,algo,false); // only AP
 		long endAll=System.currentTimeMillis();
 		TestResults results = test.getTestTimeResults();
 		

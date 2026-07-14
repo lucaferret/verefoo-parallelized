@@ -30,6 +30,7 @@ public class VerefooSerializer {
 	private Boolean REACT = false;
 	int time = 0;
 	VerificationResult res;
+	private boolean useClustering;
 	
 	public int getTime() {
 		return time;
@@ -47,9 +48,10 @@ public class VerefooSerializer {
 	 * 
 	 * @param root the NFV element received as input
 	 */
-	public VerefooSerializer(NFV root,String algo) {
+	public VerefooSerializer(NFV root,String algo, boolean useClustering) {
 		this.nfv = root;
 		this.AlgoUsed = algo;
+		this.useClustering = useClustering;
 		AllocationGraphGenerator agg = new AllocationGraphGenerator(root);
 		root = agg.getAllocationGraph();
 		VerefooNormalizer norm = new VerefooNormalizer(root);
@@ -68,20 +70,11 @@ public class VerefooSerializer {
 					throw new BadGraphError("No property defined for the Graph " + g.getId(),
 							EType.INVALID_PROPERTY_DEFINITION);
 				VerefooProxy test = new VerefooProxy(g, root.getHosts(), root.getConnections(), root.getConstraints(),
-						prop, paths, AlgoUsed, Boolean.TRUE);
+						prop, paths, AlgoUsed, useClustering);
 
 				// Extract results to avoid NullPointerException
 				testResults = test.getTestTimeResults();
 
-				// Early Exit: Stop VEREFOO without blocking the compiler
-/*
-				if (it.polito.verefoo.partitioning.GurobiClusterer.getStopAfterGurobi()) {
-					System.out.println("[Early Exit] Z3 Disabled. Return Gruobi values.");
-					this.sat = false;       // Fictitious value
-					this.result = root;     //  Prevents a crash if the test calls getResult()
-					return;
-				}
-*/
 
 				testResults = test.getTestTimeResults();
 				long beginAll = System.currentTimeMillis();
@@ -103,7 +96,11 @@ public class VerefooSerializer {
 
 						// NOTE: If your class uses 'this.nfv' instead of 'this.root', change the variable name here.
 						result = test.getMergedNFV();
+						System.out.println("Starting obtaining the results");
 						root = result;
+						System.out.println("[COORDINATOR] Calling computeOptimality...");
+						test.computeOptimality(root);
+						System.out.println("[COORDINATOR] Shutdown complete.");
 						sat = true;
 						System.out.println("SAT\n");
 						testResults.setZ3Result("SAT");
@@ -118,6 +115,7 @@ public class VerefooSerializer {
 						t.setNormalizer(norm);
 						result = t.convert(AlgoUsed);
 						root = result;
+						test.computeOptimality(root);
 						sat = true;
 						System.out.println("SAT\n");
 						testResults.setZ3Result("SAT");
@@ -254,6 +252,4 @@ public class VerefooSerializer {
 	public TestResults getTestTimeResults() {
 		return testResults;
 	}
-
-	
 }

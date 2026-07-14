@@ -102,7 +102,7 @@ public class TestPerformanceAutoConfigurationFW {
 	private void testCoarse(NFV root) throws Exception{
 		//System.out.println("===========FILE " + file + "===========");
 		long beginAll=System.currentTimeMillis();
-		VerefooSerializer test = new VerefooSerializer(root,algo);
+		VerefooSerializer test = new VerefooSerializer(root,algo,false);
 		long endAll=System.currentTimeMillis();
 		 if(test.isSat()){
 			nSAT++;

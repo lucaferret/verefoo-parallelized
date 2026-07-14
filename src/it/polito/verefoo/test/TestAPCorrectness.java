@@ -79,7 +79,7 @@ public class TestAPCorrectness {
         u.setSchema(schema);
         NFV root = (NFV) u.unmarshal( new FileInputStream( file ) );
         
-		VerefooSerializer test = new VerefooSerializer(root,"AP");
+		VerefooSerializer test = new VerefooSerializer(root,"AP",false);
         
         
         if(test.isSat()){

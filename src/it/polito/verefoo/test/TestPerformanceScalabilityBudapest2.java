@@ -147,7 +147,7 @@ public class TestPerformanceScalabilityBudapest2 {
 
 	private static NFV testCoarse(NFV root) throws Exception{
 		long beginAll=System.currentTimeMillis();
-		VerefooSerializer test = new VerefooSerializer(root,algo); // change to choose algo.
+		VerefooSerializer test = new VerefooSerializer(root,algo,false); // change to choose algo.
 		
 		long endAll=System.currentTimeMillis();
 		 if(test.isSat()){
