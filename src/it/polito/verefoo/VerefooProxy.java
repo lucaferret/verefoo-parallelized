@@ -162,6 +162,7 @@ public class VerefooProxy {
 			fillTransformationMap();
 			//printTransformations(); //DEBUG
 			computeAtomicFlows();
+			System.out.println("finished to compute atomic flows");
 			t1 = System.currentTimeMillis();
 			testResults.setAtomicFlowsCompTime(t1-t2);
 			testResults.setBeginMaxSMTTime(t1);
@@ -291,18 +292,23 @@ public class VerefooProxy {
 
 					for (Future<GurobiResult> f : futures) {
 						try {
-							GurobiResult r = f.get(300, java.util.concurrent.TimeUnit.SECONDS);
+							//GurobiResult r = f.get(300, java.util.concurrent.TimeUnit.SECONDS);
+							GurobiResult r = f.get();
 							if (r == null || r.getNFV() == null) {
 								this.sat = false;
+								break;
 							} else {
 								GurobiResults.add(r);
 								nfvResults.add(r.getNFV());
 							}
-						} catch(java.util.concurrent.TimeoutException e) {
+						/*} catch(java.util.concurrent.TimeoutException e) {
 							f.cancel(true); // interrupt the thread; native Z3 won't stop but Java unblocks
 							this.sat = false;
 							System.err.println("[COORDINATOR] Cluster task timed out after 300s. Marking attempt as failed.");
+
+					 */
 						} catch (InterruptedException | ExecutionException e) {
+							Thread.currentThread().interrupt();
 							f.cancel(true);
 							this.sat = false;
 							e.printStackTrace();
@@ -325,7 +331,13 @@ public class VerefooProxy {
 						long t_1 = System.currentTimeMillis();
 						testResults.setStartMergeTime(t_1);
 						System.out.println("[COORDINATOR] mergeResults starting...");
-						NFV finalResult = mergeResults(nfvResults, "AP");
+						NFV finalResult;
+						try {
+							finalResult = mergeResults(nfvResults, "AP");
+						} catch(NullPointerException e) {
+							e.printStackTrace();
+							break;
+						}
 						System.out.println("[COORDINATOR] mergeResults done. optimizeDuplicateFirewalls starting...");
 						optimizeDuplicateFirewalls(finalResult, "AP");
 						System.out.println("[COORDINATOR] optimizeDuplicateFirewalls done. addOtherNodes starting...");
@@ -347,11 +359,14 @@ public class VerefooProxy {
 				}
 			} else {
 				allocateFunctionsAP();
+				System.out.println("APs allocated");
 				// Change Execution depending on chosen algorithm
 				allocationManager.configureFunctionsAP(); // atomic predicate method
+				System.out.println("APs congigured");
 
 				check = new Checker(ctx, nctxAP, allocationNodesAP);
 				formalizeRequirementsAP();
+				System.out.println("requirements formalized");
 			}
 		}
 
@@ -532,18 +547,21 @@ public class VerefooProxy {
 
 					for (Future<GurobiResult> f : futuresMF) {
 						try {
-							GurobiResult r = f.get(300, java.util.concurrent.TimeUnit.SECONDS);
+							//GurobiResult r = f.get(300, java.util.concurrent.TimeUnit.SECONDS);
+							GurobiResult r = f.get();
 							if (r == null || r.getNFV() == null) {
 								this.sat = false;
+								break;
 							} else {
 								GurobiResultsMF.add(r);
 								nfvResults.add(r.getNFV());
 							}
-						} catch(java.util.concurrent.TimeoutException e) {
+						/*} catch(java.util.concurrent.TimeoutException e) {
 							f.cancel(true); // interrupt the thread; native Z3 won't stop but Java unblocks
 							this.sat = false;
 							System.err.println("[COORDINATOR] Cluster task timed out after 300s. Marking attempt as failed.");
-						} catch (InterruptedException | ExecutionException e) {
+						*/} catch (InterruptedException | ExecutionException e) {
+							Thread.currentThread().interrupt();
 							f.cancel(true);
 							this.sat = false;
 							e.printStackTrace();
@@ -754,12 +772,27 @@ public class VerefooProxy {
 		List<Node> nodes = root.getGraphs().getGraph().get(0).getNode();
 		int numberOfFirewalls = 0;
 		int totalRules = 0;
+		System.out.println("\n=== FINAL FIREWALL AUDIT ===");
 		for (Node n : nodes) {
 			if (n.getFunctionalType() != null && n.getFunctionalType().value().equals("FIREWALL")) {
+				Firewall fw = n.getConfiguration().getFirewall();
+
 				numberOfFirewalls++;
 				totalRules += n.getConfiguration().getFirewall().getElements().size();
+
+				System.out.println("FW Node: " + n.getName() + " | Default Action: " + fw.getDefaultAction().value() + " | Rules: " + totalRules);
+
+				/*for (Elements rule : fw.getElements()) {
+					System.out.println("  -> Rule Action: " + rule.getAction().value()
+							+ " | Src: " + rule.getSource()
+							+ " | Dst: " + rule.getDestination()
+							+ " | Proto: " + rule.getProtocol());
+				}*/
+
 			}
+
 		}
+		System.out.println("============================\n");
 
 		double avgRules = numberOfFirewalls > 0 ? ((double) totalRules / numberOfFirewalls) : 0.0;
 
@@ -797,29 +830,26 @@ public class VerefooProxy {
 					else if ((nodeAlreadyPresent.getFunctionalType() == null || !nodeAlreadyPresent.getFunctionalType().value().equals("FIREWALL")) && (node.getFunctionalType() != null && node.getFunctionalType().value().equals("FIREWALL"))) { // the node already present is not a firewall while the node to add is a firewall
 						g.getNode().remove(nodeAlreadyPresent);
 						g.getNode().add(node);
-					}
-					else if ((nodeAlreadyPresent.getFunctionalType() != null && nodeAlreadyPresent.getFunctionalType().value().equals("FIREWALL")) && (node.getFunctionalType() != null && node.getFunctionalType().value().equals("FIREWALL"))) {  //both the nodes are firewalls
-						String defActNodeAlreadyPresent = nodeAlreadyPresent.getConfiguration().getFirewall().getDefaultAction().value();
-						String defActNode = node.getConfiguration().getFirewall().getDefaultAction().value();
+					} else if ((nodeAlreadyPresent.getFunctionalType() != null && nodeAlreadyPresent.getFunctionalType().value().equals("FIREWALL")) && (node.getFunctionalType() != null && node.getFunctionalType().value().equals("FIREWALL"))) {  //both the nodes are firewalls
+						//String defActNodeAlreadyPresent = nodeAlreadyPresent.getConfiguration().getFirewall().getDefaultAction().value();
+						//String defActNode = node.getConfiguration().getFirewall().getDefaultAction().value();
+
+						ActionTypes daPresent = nodeAlreadyPresent.getConfiguration().getFirewall().getDefaultAction();
+						ActionTypes daNode = node.getConfiguration().getFirewall().getDefaultAction();
+						String defActNodeAlreadyPresent = (daPresent != null) ? daPresent.value() : "DENY";
+						String defActNode = (daNode != null) ? daNode.value() : "DENY";
+
+						//List<Elements> rulesNodeAlreadyPresent = nodeAlreadyPresent.getConfiguration().getFirewall().getElements();
 						List<Elements> rulesNodeAlreadyPresent = nodeAlreadyPresent.getConfiguration().getFirewall().getElements();
 						List<Elements> rulesNode = node.getConfiguration().getFirewall().getElements();
 						if (defActNodeAlreadyPresent.equals(defActNode)) { // the 2 firewalls have the same default action
-							rulesNodeAlreadyPresent.addAll(rulesNode); // add all the rules of the other firewall
 							for (Elements rule : rulesNode) {
-								if (rulesNodeAlreadyPresent.stream().filter(r -> compareElements(r,rule)).count() == 0)  //the rule is not present
+								// Only add the rule if it doesn't already mathematically exist in the list
+								if (rulesNodeAlreadyPresent.stream().noneMatch(r -> compareElements(r, rule))) {
 									rulesNodeAlreadyPresent.add(rule);
+								}
 							}
-	//							if (defActNode.equals("ALLOW"))  //the default action is allow
-	//								rulesNodeAlreadyPresent.addAll(rulesNode); // add all the rules of the other firewall because they are complementary
-	//							else {  // the default action is deny
-	//								// nothing happens because the two firewalls have the same rules, just leave the firewall already present
-	//								if (rulesNodeAlreadyPresent.size() < rulesNode.size()) {
-	//									g.getNode().remove(nodeAlreadyPresent);
-	//									g.getNode().add(node);
-	//								}
-	//							}
-						}
-						else {  // the 2 firewalls have a different default action
+						} else {  // the 2 firewalls have a different default action
 							Node firewallAllowlist = new Node();
 							Node firewallDenylist = new Node();
 							firewallAllowlist.setName(nodeAlreadyPresent.getName());
@@ -838,12 +868,16 @@ public class VerefooProxy {
 							firewallDenylist.getConfiguration().getFirewall().setDefaultAction(ActionTypes.ALLOW);
 							firewallDenylist.getNeighbour().addAll(nodeAlreadyPresent.getNeighbour());
 							if (nodeAlreadyPresent.getConfiguration().getFirewall().getDefaultAction().value().equals("ALLOW"))
-								firewallAllowlist.getConfiguration().getFirewall().getElements().addAll(nodeAlreadyPresent.getConfiguration().getFirewall().getElements());
+								firewallDenylist.getConfiguration().getFirewall().getElements().addAll(nodeAlreadyPresent.getConfiguration().getFirewall().getElements());
 
 							List<Elements> isolationRules;
 							List<Elements> reachabilityRules;
 							if (algo.equals("AP")) {
-								Collection<FlowPathAP> crossingFlows = allocationNodesAP.values().stream().filter(ap -> ap.getIpAddress().equals(nodeAlreadyPresent.getName())).collect(Collectors.toList()).get(0).getCrossingFlows().values();
+								// FIX: Stream the global map to find flows crossing this specific node
+								Collection<FlowPathAP> crossingFlows = trafficFlowsMapAP.values().stream()
+										.filter(fp -> fp.getPath().stream().anyMatch(apNode -> apNode.getIpAddress().equals(nodeAlreadyPresent.getName())))
+										.collect(Collectors.toList());
+
 								Collection<FlowPathAP> crossingFlowsIso = crossingFlows.stream().filter(f -> f.getRequirement().getOriginalProperty().getName().equals(PName.ISOLATION_PROPERTY)).collect(Collectors.toList());
 								Collection<FlowPathAP> crossingFlowsReach = crossingFlows.stream().filter(f -> f.getRequirement().getOriginalProperty().getName().equals(PName.REACHABILITY_PROPERTY)).collect(Collectors.toList());
 
@@ -868,9 +902,12 @@ public class VerefooProxy {
 									e.setProtocol(f.getRequirement().getOriginalProperty().getLv4Proto());
 									return e;
 								}).collect(Collectors.toList());
-							}
-							else {
-								Collection<FlowPathMF> crossingFlows = allocationNodesMF.values().stream().filter(ap -> ap.getIpAddress().equals(nodeAlreadyPresent.getName())).collect(Collectors.toList()).get(0).getCrossingFlows().values();
+							} else {
+								// FIX: Stream the global map for MF as well
+								Collection<FlowPathMF> crossingFlows = trafficFlowsMapMF.values().stream()
+										.filter(fp -> fp.getPath().stream().anyMatch(mfNode -> mfNode.getIpAddress().equals(nodeAlreadyPresent.getName())))
+										.collect(Collectors.toList());
+
 								Collection<FlowPathMF> crossingFlowsIso = crossingFlows.stream().filter(f -> f.getRequirement().getOriginalProperty().getName().equals(PName.ISOLATION_PROPERTY)).collect(Collectors.toList());
 								Collection<FlowPathMF> crossingFlowsReach = crossingFlows.stream().filter(f -> f.getRequirement().getOriginalProperty().getName().equals(PName.REACHABILITY_PROPERTY)).collect(Collectors.toList());
 
@@ -914,9 +951,9 @@ public class VerefooProxy {
 					if (!finalResult.getPropertyDefinition().getProperty().stream().anyMatch(p -> compareProperties(p, prop)))
 						finalResult.getPropertyDefinition().getProperty().add(prop);
 				}
-
 			}
 		}
+
 		return finalResult;
 	}
 
@@ -987,6 +1024,11 @@ public class VerefooProxy {
 			List<AtomicFlow> crossingFlows = isolationFlowsByNode
 					.getOrDefault(firewallName, Collections.emptyList());
 
+			if (crossingFlows.isEmpty()) {
+				// No isolation flows cross this node — cannot determine safety, keep it
+				continue;
+			}
+
 			boolean removable = true;
 			for (AtomicFlow isolationFlow : crossingFlows) {
 				// Note: Calling the optimized helper method here
@@ -1056,6 +1098,11 @@ public class VerefooProxy {
 
 			List<MaximalFlow> crossingFlows = isolationFlowsByNode
 					.getOrDefault(firewallName, Collections.emptyList());
+
+			if (crossingFlows.isEmpty()) {
+				// No isolation flows cross this node — cannot determine safety, keep it
+				continue;
+			}
 
 			boolean removable = true;
 			for (MaximalFlow isolationFlow : crossingFlows) {
@@ -1265,10 +1312,19 @@ public class VerefooProxy {
 		return true;
 	}
 
-	private boolean compareElements(Elements e1, Elements e2) {
+	/*private boolean compareElements(Elements e1, Elements e2) {
 		if (e1.getSource().equals(e2.getSource()) && e1.getSrcPort().equals(e2.getSrcPort()) && e1.getDestination().equals(e2.getDestination()) && e1.getDstPort().equals(e2.getDstPort()))
 			return true;
 		return false;
+	}*/
+
+	private boolean compareElements(Elements e1, Elements e2) {
+		return Objects.equals(e1.getSource(), e2.getSource()) &&
+				Objects.equals(e1.getDestination(), e2.getDestination()) &&
+				Objects.equals(e1.getSrcPort(), e2.getSrcPort()) &&
+				Objects.equals(e1.getDstPort(), e2.getDstPort()) &&
+				Objects.equals(e1.getProtocol(), e2.getProtocol()) &&
+				Objects.equals(e1.getAction(), e2.getAction());
 	}
 
 	public NFV getMergedNFV() {
@@ -1301,7 +1357,9 @@ public class VerefooProxy {
 			APUtilsAP aputilsNew = new APUtilsAP();
 			tasks.add(threadPool.submit(new GenerateFlowsTask(sr, networkAtomicPredicates, aputilsNew, transformersNode, atomicId)));
 		}
+		System.out.println("Flows task generated");
 
+		threadPool.shutdown();
 		//Join results
 		for(Future<?> fut: tasks) {
 			try {
@@ -1310,7 +1368,7 @@ public class VerefooProxy {
 				e.printStackTrace();
 			}
 		}
-		threadPool.shutdown();
+		System.out.println("all thread have finished");
 
 
 	/*	//DEBUG: print atomic flows for each requirement
@@ -1358,7 +1416,7 @@ public class VerefooProxy {
 		testResults.setTotalFlows(totalFlows);
 
 		//built map that assign to each allocation node the set of atomic predicates in input
-		for(SecurityRequirement sr : securityRequirements.values()) {
+		/*for(SecurityRequirement sr : securityRequirements.values()) {
 			for(FlowPathAP flowPath: sr.getFlowsMapAP().values()) {
 				List<AllocationNodeAP> path = flowPath.getPath();
 				for(AtomicFlow atomicFlow: flowPath.getAtomicFlowsMap().values()) {
@@ -1445,7 +1503,127 @@ public class VerefooProxy {
 
 				}
 			}
+		}*/
+// Build fast-lookup sets once per firewall node, outside the inner loops.
+		Map<String, Set<Integer>> fwForwardSet = new HashMap<>();
+		Map<String, Set<Integer>> fwDroppedSet = new HashMap<>();
+
+		for (Map.Entry<String, Node> entry : transformersNode.entrySet()) {
+			String ip = entry.getKey();
+			AllocationNodeAP allocNode = allocationNodesAP.get(ip);
+			if (allocNode == null) continue;
+			if (entry.getValue().getFunctionalType() == FunctionalTypes.FIREWALL) {
+				fwForwardSet.put(ip, new HashSet<>(allocNode.getForwardBehaviourList()));
+				fwDroppedSet.put(ip, new HashSet<>(allocNode.getDroppedList()));
+			}
 		}
+
+		// Populate node inputs and evaluate firewall behaviors
+		for (SecurityRequirement sr : securityRequirements.values()) {
+			for (FlowPathAP flowPath : sr.getFlowsMapAP().values()) {
+				List<AllocationNodeAP> path = flowPath.getPath();
+
+				for (AtomicFlow atomicFlow : flowPath.getAtomicFlowsMap().values()) {
+					int index = 1;
+
+					for (Integer ap : atomicFlow.getAtomicPredicateList()) {
+						AllocationNodeAP currentNode = path.get(index);
+						String nodeIp = currentNode.getIpAddress();
+
+						// CRITICAL: This must run for both Vanilla AND Clustered executions!
+						currentNode.addAtomicPredicateInInput(flowPath.getIdFlow(), atomicFlow.getFlowId(), ap);
+
+						if (transformersNode.containsKey(nodeIp)) {
+							Node transformer = transformersNode.get(nodeIp);
+
+							if (transformer.getFunctionalType() == FunctionalTypes.FIREWALL) {
+								Set<Integer> forwardSet = fwForwardSet.get(nodeIp);
+								Set<Integer> droppedSet = fwDroppedSet.get(nodeIp);
+
+								// O(1) Cache Hit: Skip heavy math if already evaluated
+								if (forwardSet.contains(ap) || droppedSet.contains(ap)) {
+									index++;
+									continue;
+								}
+
+								// Cache Miss: Compute the intersection
+								boolean found = false;
+								Predicate apPred = networkAtomicPredicates.get(ap);
+								for (Predicate allowed : currentNode.getForwardBehaviourPredicateList()) {
+									Predicate intersection = aputilsAP.computeIntersection(apPred, allowed);
+									if (intersection != null && aputilsAP.APCompare(intersection, apPred)) {
+										found = true;
+										break;
+									}
+								}
+
+								// Save result to the O(1) Sets (This acts as the cache!)
+								if (found) {
+									currentNode.addForwardingPredicate(ap);
+									forwardSet.add(ap);
+								} else {
+									currentNode.addDroppedPredicate(ap);
+									droppedSet.add(ap);
+								}
+							}
+
+							if (transformer.getFunctionalType() == FunctionalTypes.STATEFUL_FIREWALL) {
+								System.out.println("starting computing the firewalls");
+								StatefulPacketFilter spf = (StatefulPacketFilter) currentNode.getPlacedNF();
+
+								// Check if this predicate was already evaluated by the stateful firewall
+								if (spf.getAllowAtomicPredicates().values().contains(ap)
+										|| spf.getDenyAtomicPredicates().contains(ap)
+										|| spf.getAllowCondAtomicPredicates().values().contains(ap)
+										|| spf.getAllowCondInvAtomicPredicates().values().contains(ap)) {
+									index++;
+									continue; // already checked
+								}
+
+								boolean foundIntersection = false;
+
+								for (Map.Entry<Integer, Predicate> allowedCond : spf.getAllowCondPredicates().entrySet()) {
+									Predicate intersectionPredicate = aputilsAP.computeIntersection(networkAtomicPredicates.get(ap), allowedCond.getValue());
+									if (intersectionPredicate != null && aputilsAP.APCompare(intersectionPredicate, networkAtomicPredicates.get(ap))) {
+										foundIntersection = true;
+										spf.addAllowCondAtomicPredicate(allowedCond.getKey(), ap);
+										break;
+									}
+								}
+
+								if (!foundIntersection) {
+									for (Map.Entry<Integer, Predicate> allowedCondInv : spf.getAllowCondInvPredicates().entrySet()) {
+										Predicate intersectionPredicate = aputilsAP.computeIntersection(networkAtomicPredicates.get(ap), allowedCondInv.getValue());
+										if (intersectionPredicate != null && aputilsAP.APCompare(intersectionPredicate, networkAtomicPredicates.get(ap))) {
+											foundIntersection = true;
+											spf.addAllowCondInvAtomicPredicate(allowedCondInv.getKey(), ap);
+											break;
+										}
+									}
+
+									if (!foundIntersection) {
+										for (Map.Entry<Integer, Predicate> allowed : spf.getAllowPredicates().entrySet()) {
+											Predicate intersectionPredicate = aputilsAP.computeIntersection(networkAtomicPredicates.get(ap), allowed.getValue());
+											if (intersectionPredicate != null && aputilsAP.APCompare(intersectionPredicate, networkAtomicPredicates.get(ap))) {
+												foundIntersection = true;
+												spf.addAllowAtomicPredicate(allowed.getKey(), ap);
+												break;
+											}
+										}
+
+										if (!foundIntersection) {
+											spf.addDenyAtomicPredicate(ap);
+										}
+									}
+								}
+							}
+						}
+						index++;
+					}
+				}
+			}
+		}
+		System.out.println("finished the infinite loop");
 	}
 
 // For debugging purposes must have two classes of it one for AP and one for MF
@@ -2076,6 +2254,7 @@ public class VerefooProxy {
 	 * At the moment only packet-filtering capability is allocated, in the future the decision will depend on the type of requirement.
 	 */
 	private void allocateFunctionsAP() {
+		System.out.println("allocation Allocation Places");
 		for(FlowPathAP sr : trafficFlowsMapAP.values()) {
 			List<AllocationNodeAP> nodes = sr.getPath();
 			int lengthList = nodes.size();
@@ -2085,6 +2264,7 @@ public class VerefooProxy {
 				allocationManager.chooseFunctionsAP(nodes.get(i), source, last);
 			}
 		}
+
 
 	}
 

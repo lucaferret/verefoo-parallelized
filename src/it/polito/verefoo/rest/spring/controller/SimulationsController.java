@@ -64,7 +64,7 @@ public class SimulationsController {
 			if(REACT) {
 				new VerefooSerializer(nfv,alg,true);
 			} else {
-				new VerefooSerializer(nfv,alg);
+				new VerefooSerializer(nfv,alg,false);
 			}
 		} catch (BadGraphError e) {
 			throw verefooCoreExceptionBuilder(e);
@@ -106,7 +106,7 @@ public class SimulationsController {
 			if(REACT) {
 				new VerefooSerializer(nfv,alg,true);
 			} else {
-				new VerefooSerializer(nfv,alg);
+				new VerefooSerializer(nfv,alg,false);
 			}
 		} catch (BadGraphError e) {
 			throw verefooCoreExceptionBuilder(e);

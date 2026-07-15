@@ -55,7 +55,7 @@ public class GurobiClusterer {
     private static double ACTIVE_CLUSTERS = 0;
 
     private static final int N_MIN = 6;
-    private static final int N_MAX = 40;
+    private static final int N_MAX = 35;
 
     private int fw_upper_bound = 0;
     private int flows_upper_bound = 0;
@@ -134,7 +134,6 @@ public class GurobiClusterer {
                 Fw[i] = 0;
             }
         }
-
         fw_upper_bound = Math.min(totalAp, N_MAX);
 
         for (int load : nodeLoads.values()) {
@@ -160,7 +159,7 @@ public class GurobiClusterer {
         // Default (-1) lets Gurobi choose, often picking 'Concurrent' (running all algorithms at once).
         // Setting it to '2' forces the Barrier method, which is generally faster and more predictable for large, sparse network graphs.
         env.set(GRB.IntParam.Method, 2);
-        env.set(GRB.DoubleParam.TimeLimit, 600.0);
+        env.set(GRB.DoubleParam.TimeLimit, 60.0);
 
 
         env.start();
@@ -171,10 +170,11 @@ public class GurobiClusterer {
         GRBModel model = null;
 
 
+
         // if the parameter controls how Gurobi thinks, set it on env. If it controls when Gurobi stops, set it on model
         try {
             model = new GRBModel(env);
-            model.set(GRB.DoubleParam.TimeLimit, 600.0);
+            model.set(GRB.DoubleParam.TimeLimit, 60.0);
 
             int numEdges = edges.size();
 

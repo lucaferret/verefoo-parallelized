@@ -206,6 +206,10 @@ public class Checker {
 						traffic = -1;
 					else
 						traffic = node.getAtomicPredicatesInInputForFlow(flowPath.getIdFlow()).get(atomicFlowEntry.getValue().getFlowId());
+
+					if (node.getPlacedNF() == null) {
+						continue;
+					}
 					singleConstraints.add(ctx.mkImplies(node.getPlacedNF().getUsed(), ctx.mkEq( (BoolExpr)nctxAP.deny.apply(node.getZ3Name(), ctx.mkInt(traffic)), ctx.mkFalse())));
 				}
 				

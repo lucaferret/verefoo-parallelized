@@ -54,7 +54,7 @@ public class RestFoo {
 	    public NFV put(@Context HttpServletRequest req,@ApiParam(value = "Complete or Tiny Response")@DefaultValue("true")@QueryParam("complete") Boolean complete,@ApiParam(value = "Network Schema", required = true) NFV root, 
 	    		@RequestParam(name = "Algorithm") String alg) throws MalformedURLException { // add @RequestParam to let the user send the algorithm to be used
 				String z3model = new String();
-				VerefooSerializer test = new VerefooSerializer(root,alg); // added algorithm
+				VerefooSerializer test = new VerefooSerializer(root,alg,false); // added algorithm
 				NFV rootResult = test.getResult();
 				return rootResult;
 	    }
