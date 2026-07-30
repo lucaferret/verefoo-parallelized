@@ -133,7 +133,7 @@ public class VerefooProxy {
 			HashMap<String, String> cfg = new HashMap<String, String>();
 			cfg.put("model", "true");
 
-			cfg.put("timeout", "1200000"); // timeout in milliseconds
+			cfg.put("timeout", "1800000"); // timeout in milliseconds
 			ctx = new Context(cfg);
 
 			//Creation of the NetContext (z3 variables)
@@ -226,6 +226,10 @@ public class VerefooProxy {
 					System.err.println("Error during ILP Clustering execution:");
 					e.printStackTrace();
 				}
+
+				// need to stop the program here
+				if (GurobiClusterer.getStopAfterGurobi())
+					return;
 				// End Gurobi Integration (AP)
 
 				Map<Node, Integer> gurobiAssignment = GurobiClusterer.getLastClusterAssignment();
@@ -394,7 +398,7 @@ public class VerefooProxy {
 			HashMap<String, String> cfg = new HashMap<String, String>();
 			cfg.put("model", "true");
 
-			cfg.put("timeout", "1200000"); // timeout in milliseconds
+			cfg.put("timeout", "1800000"); // timeout in milliseconds
 			ctx = new Context(cfg);
 
 			//Creation of the NetContext (z3 variables)
@@ -484,6 +488,8 @@ public class VerefooProxy {
 					System.err.println("Error during ILP Clustering execution:");
 					e.printStackTrace();
 				}
+				if(GurobiClusterer.getStopAfterGurobi())
+					return;
 				// End Gurobi Integration (MF)
 
 				Map<Node, Integer> gurobiAssignmentMF = GurobiClusterer.getLastClusterAssignment();
@@ -680,7 +686,7 @@ public class VerefooProxy {
 			HashMap<String, String> cfg = new HashMap<String, String>();
 			cfg.put("model", "true");
 
-			cfg.put("timeout", "1200000"); // timeout in milliseconds
+			cfg.put("timeout", "1800000"); // timeout in milliseconds
 			ctx = new Context(cfg);
 
 			//Creation of the NetContext (z3 variables)

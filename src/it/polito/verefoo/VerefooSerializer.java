@@ -79,10 +79,10 @@ public class VerefooSerializer {
 				testResults = test.getTestTimeResults();
 				long beginAll = System.currentTimeMillis();
 
-				if(AlgoUsed.equals("AP")) 
-				res = test.checkNFFGPropertyAP();
-				else 
-				res = test.checkNFFGPropertyMF();
+				if(AlgoUsed.equals("AP"))
+					res = test.checkNFFGPropertyAP();
+				else
+					res = test.checkNFFGPropertyMF();
 				
 				long endAll = System.currentTimeMillis();
 				//loggerResult.debug("Only checker: " + (endAll - beginAll) + "ms");
@@ -96,7 +96,14 @@ public class VerefooSerializer {
 
 						// NOTE: If your class uses 'this.nfv' instead of 'this.root', change the variable name here.
 						result = test.getMergedNFV();
-						System.out.println("Starting obtaining the results");
+
+						if (result == null) {
+							System.out.println("[COORDINATOR] Merged NFV is null. Assuming early exit for Gurobi testing.");
+							sat = false;
+							testResults.setZ3Result("EARLY_EXIT");
+							return; // Safely exit the serializer!
+						}
+
 						root = result;
 						System.out.println("[COORDINATOR] Calling computeOptimality...");
 						test.computeOptimality(root);
@@ -165,7 +172,7 @@ public class VerefooSerializer {
 				testResults = test.getTestTimeResults();
 				long beginAll = System.currentTimeMillis();
 				
-				if(AlgoUsed.equals("AP")) 
+				if(AlgoUsed.equals("AP"))
 					res = test.checkNFFGPropertyAP();
 				else 
 					res = test.checkNFFGPropertyMF();
