@@ -30,6 +30,10 @@ The algorithm for the computation of Maximal Flows maximizes the aggregation of 
 ### REACT Version
 REACT VEREFOO is a custom version of VEREFOO with additional support for the reconfiguration of packet filtering firewalls, so as to fulfill the user-specified security connectivity requirements. REACT VEREFOO maintains the core principles of VEREFOO (i.e., automation, formal correctness assurance, optimization) and adds the capability of reusing any previously computed configuration instead of forcing the reconfiguration of the whole network from scratch.
 
+### Parallelized ILP Version (Clustered VEREFOO)
+To overcome the exponential state-space explosion typical of NP-hard MaxSMT problems in large-scale networks, this version introduces a *divide et impera* approach. It leverages an Integer Linear Programming (ILP) solver to partition the original Allocation Graph into computationally manageable, disjoint subgraphs while mathematically balancing the load and minimizing cutoff flows (inter-cluster dependencies). 
+
+Independent VEREFOO instances are executed concurrently on each subgraph, fully utilizing multi-core environments. Finally, a deterministic aggregation phase merges the localized configurations and systematically deallocates redundant boundary firewalls. This parallelized architecture trades strict global optimality for massive computational speedups, allowing VEREFOO to scale efficiently to enterprise-level virtualized infrastructures.
 
 ## VEREFOO Dependencies
 
@@ -45,9 +49,8 @@ and [neo4j 3.5.25](https://go.neo4j.com/download-thanks.html?edition=community&r
     sudo apt install ./cypher-shell_1.1.15_all.deb
     sudo apt install ./neo4j_3.5.25_all.deb
     ```
-
-
 * Z3 4.8.8 (https://github.com/Z3Prover/z3/releases)
+* Gurobi Optimizer (https://www.gurobi.com/) - *Required for the Parallelized ILP version. (Note: A valid academic or commercial license is required to run the solver).*
 
 ### Z3 library support
 
@@ -101,6 +104,7 @@ The source code of the framework is organized in a clear way through the followi
 * Firewall &rarr; files regarding the actual application and deployment of produced configuration on the different types of firewalls (e.g., IPTables, OVS, etc...)
 * Functions &rarr; files regarding the representation of the different Network Functions, ranging from the EndHost, to the LoadBalancer, to the PacketFilter itself, and many other NF; 
 * Graph &rarr; files regarding the management of the flows, addresses, ports, traffic and security requirements;
+* Partitioning &rarr; files regarding the ILP network clusterization logic (Gurobi-based) and subnetwork generation;
 * Rest &rarr; files for building and managing the REST service using Spring;
 * Solver &rarr; files regarding the model and constraints checking for both algorithms (AP and MF);
 * Translator &rarr; files regarding the translation of Verefoo output into the correct XML through the use of parser and pattern matchers; 
@@ -150,6 +154,13 @@ To interact with REACT VEREFOO, it is necessary to express the request with an a
 > * `http://localhost:8085/VEREFOO/adp/simulations?Algorithm=AP&REACT=true`
 
 It should be noted that this parameter is optional, to maintain full compatibility with the previous version and APIs.
+
+#### Select Parallel Execution (Clustering)
+
+To leverage the Gurobi ILP-based parallelized execution of VEREFOO, an additional query parameter can be appended to your request. This approach currently supports both the AP and MF algorithms.
+
+> Example:
+> * `http://localhost:8085/VEREFOO/adp/simulations?Algorithm=AP&useClustering=true`
 
 ### Neo4j compatibility recommendations
 
